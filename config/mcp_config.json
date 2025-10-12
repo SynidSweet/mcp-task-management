@@ -1,0 +1,81 @@
+{
+  "server": {
+    "name": "task-sprint-mcp-server",
+    "version": "1.0.0",
+    "description": "MCP server for Task & Sprint Management System"
+  },
+  "transport": {
+    "type": "stdio",
+    "encoding": "utf-8"
+  },
+  "tools": {
+    "task_management": {
+      "enabled": true,
+      "tools": [
+        "task_create",
+        "task_get",
+        "task_update",
+        "task_list",
+        "task_delete",
+        "task_stats"
+      ]
+    },
+    "sprint_management": {
+      "enabled": true,
+      "tools": [
+        "sprint_create",
+        "sprint_activate",
+        "sprint_current",
+        "sprint_list",
+        "sprint_add_task",
+        "sprint_stats"
+      ]
+    },
+    "backlog_management": {
+      "enabled": true,
+      "tools": [
+        "backlog_add",
+        "backlog_list",
+        "backlog_move_to_sprint",
+        "backlog_prioritize",
+        "backlog_stats"
+      ]
+    },
+    "system_operations": {
+      "enabled": true,
+      "tools": [
+        "system_config_get",
+        "system_validate_schemas",
+        "system_backup_create",
+        "system_health_check",
+        "health_check"
+      ]
+    }
+  },
+  "compatibility": {
+    "cli_mode": true,
+    "dual_operation": true,
+    "data_format": "json",
+    "preserve_cli_config": true
+  },
+  "project": {
+    "name": "task-sprint-system",
+    "root_path": "/home/petter/.claude/task-sprint-system",
+    "data_directory": "data"
+  },
+  "task_system": {
+    "id_format": "TASK-{year}-{counter:03d}",
+    "sprint_id_format": "SPRINT-{year}-Q{quarter}-DEV{counter:02d}",
+    "default_priority": "medium",
+    "default_complexity": "medium"
+  },
+  "backup": {
+    "enabled": true,
+    "retention_days": 7,
+    "max_backups": 20
+  },
+  "validation": {
+    "strict_schema": true,
+    "auto_repair": true
+  }
+}

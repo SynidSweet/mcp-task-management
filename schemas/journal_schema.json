@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Journal Data Schema",
+  "description": "Schema for session journaling data structure in .claude-tasks/journal.json",
+  "type": "object",
+  "required": ["sessions", "metadata"],
+  "properties": {
+    "sessions": {
+      "type": "array",
+      "description": "Array of session journal entries",
+      "items": {
+        "$ref": "#/$defs/session"
+      }
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    }
+  },
+  "$defs": {
+    "session": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "timestamp",
+        "session_type",
+        "duration_minutes",
+        "tasks_worked",
+        "key_achievements",
+        "discoveries",
+        "technical_decisions",
+        "issues_encountered",
+        "next_steps",
+        "sprint_progress_impact",
+        "context_changes"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "pattern": "^sess-\\d{4}-\\d{2}-\\d{2}-\\d{3}$",
+          "description": "Unique session identifier in format sess-YYYY-MM-DD-NNN"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 timestamp when session started"
+        },
+        "session_type": {
+          "type": "string",
+          "enum": ["carry-on", "investigation", "refactor", "planning", "document", "migrate"],
+          "description": "Type of session work performed"
+        },
+        "duration_minutes": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Session duration in minutes"
+        },
+        "tasks_worked": {
+          "type": "array",
+          "description": "List of tasks worked on during session",
+          "items": {
+            "$ref": "#/$defs/task_work"
+          }
+        },
+        "key_achievements": {
+          "type": "array",
+          "description": "Major accomplishments during session",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "discoveries": {
+          "type": "array",
+          "description": "Important insights or discoveries made",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "technical_decisions": {
+          "type": "array",
+          "description": "Technical decisions made during session",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "issues_encountered": {
+          "type": "array",
+          "description": "Problems encountered and their resolutions",
+          "items": {
+            "$ref": "#/$defs/issue"
+          }
+        },
+        "next_steps": {
+          "type": "array",
+          "description": "Identified next steps or follow-up actions",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "sprint_progress_impact": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "How this session impacted current sprint progress"
+        },
+        "context_changes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Important context changes from this session"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this journal entry was created"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this journal entry was last updated"
+        }
+      },
+      "additionalProperties": false
+    },
+    "task_work": {
+      "type": "object",
+      "required": ["task_id", "status_change", "work_summary"],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Z]+(-[A-Z]+)*-\\d{4}-\\d{1,4}$",
+          "description": "Task identifier that was worked on"
+        },
+        "status_change": {
+          "type": "string",
+          "enum": ["started", "completed", "blocked", "progressed", "abandoned"],
+          "description": "How the task status changed during this session"
+        },
+        "work_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "Summary of work performed on this task"
+        },
+        "instruction_type": {
+          "type": "string",
+          "enum": ["enriched", "standard"],
+          "description": "Optional: Whether task used enriched instructions from preparation agent"
+        },
+        "enrichment_followed": {
+          "type": "boolean",
+          "description": "Optional: Whether agent followed preparation guidance during implementation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["description", "resolution", "follow_up_needed"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "description": "Description of the issue encountered"
+        },
+        "resolution": {
+          "type": ["string", "null"],
+          "maxLength": 400,
+          "description": "How the issue was resolved, null if unresolved"
+        },
+        "follow_up_needed": {
+          "type": "boolean",
+          "description": "Whether this issue requires follow-up action"
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "version",
+        "total_sessions",
+        "last_session_id",
+        "schema_version"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the journal was first created"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Journal system version"
+        },
+        "total_sessions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of sessions recorded"
+        },
+        "last_session_id": {
+          "type": ["string", "null"],
+          "description": "ID of the most recent session, null if no sessions"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Journal schema version identifier"
+        },
+        "auto_cleanup_enabled": {
+          "type": "boolean",
+          "description": "Whether automatic cleanup of old sessions is enabled"
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of days to retain journal entries"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

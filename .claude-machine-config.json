@@ -1,0 +1,6 @@
+{
+  "machine_id": "test-machine",
+  "description": "Test machine for MCP document tools validation",
+  "created_at": "2025-10-12T00:00:00Z",
+  "version": "1.0"
+}

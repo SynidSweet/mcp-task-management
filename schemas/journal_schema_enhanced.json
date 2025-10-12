@@ -1,0 +1,520 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Enhanced Journal Data Schema with Preparation Quality Tracking",
+  "description": "Extended schema for session journaling with preparation effectiveness tracking in .claude-tasks/journal.json",
+  "type": "object",
+  "required": ["sessions", "metadata"],
+  "properties": {
+    "sessions": {
+      "type": "array",
+      "description": "Array of session journal entries with optional preparation tracking",
+      "items": {
+        "$ref": "#/$defs/session"
+      }
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    }
+  },
+  "$defs": {
+    "session": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "timestamp",
+        "session_type",
+        "duration_minutes",
+        "tasks_worked",
+        "key_achievements",
+        "discoveries",
+        "technical_decisions",
+        "issues_encountered",
+        "next_steps",
+        "sprint_progress_impact",
+        "context_changes"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "pattern": "^sess-\\d{4}-\\d{2}-\\d{2}-\\d{3}$",
+          "description": "Unique session identifier in format sess-YYYY-MM-DD-NNN"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 timestamp when session started"
+        },
+        "session_type": {
+          "type": "string",
+          "enum": ["carry-on", "investigation", "refactor", "planning", "document", "migrate"],
+          "description": "Type of session work performed"
+        },
+        "duration_minutes": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Session duration in minutes"
+        },
+        "tasks_worked": {
+          "type": "array",
+          "description": "List of tasks worked on during session with optional preparation tracking",
+          "items": {
+            "$ref": "#/$defs/task_work"
+          }
+        },
+        "key_achievements": {
+          "type": "array",
+          "description": "Major accomplishments during session",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "discoveries": {
+          "type": "array",
+          "description": "Important insights or discoveries made",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "technical_decisions": {
+          "type": "array",
+          "description": "Technical decisions made during session",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "issues_encountered": {
+          "type": "array",
+          "description": "Problems encountered and their resolutions",
+          "items": {
+            "$ref": "#/$defs/issue"
+          }
+        },
+        "next_steps": {
+          "type": "array",
+          "description": "Identified next steps or follow-up actions",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "sprint_progress_impact": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "How this session impacted current sprint progress"
+        },
+        "context_changes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Important context changes from this session"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this journal entry was created"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this journal entry was last updated"
+        },
+        "preparation_effectiveness": {
+          "$ref": "#/$defs/preparation_effectiveness",
+          "description": "Optional: Preparation quality and implementation outcome tracking"
+        }
+      },
+      "additionalProperties": false
+    },
+    "task_work": {
+      "type": "object",
+      "required": ["task_id", "status_change", "work_summary"],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^TASK-\\d{4}-\\d{3}$",
+          "description": "Task identifier that was worked on"
+        },
+        "status_change": {
+          "type": "string",
+          "enum": ["started", "completed", "blocked", "progressed", "abandoned"],
+          "description": "How the task status changed during this session"
+        },
+        "work_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "Summary of work performed on this task"
+        },
+        "preparation_outcome": {
+          "$ref": "#/$defs/task_preparation_outcome",
+          "description": "Optional: Preparation quality and implementation outcome for this specific task"
+        }
+      },
+      "additionalProperties": false
+    },
+    "task_preparation_outcome": {
+      "type": "object",
+      "required": [
+        "preparation_quality_score",
+        "implementation_success_score",
+        "first_attempt_success",
+        "preparation_effectiveness_rating"
+      ],
+      "properties": {
+        "preparation_quality_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Overall preparation quality score (0.0 = poor, 1.0 = excellent)"
+        },
+        "implementation_success_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Implementation success score (0.0 = failed, 1.0 = perfect success)"
+        },
+        "first_attempt_success": {
+          "type": "boolean",
+          "description": "Whether implementation succeeded on first attempt"
+        },
+        "preparation_effectiveness_rating": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Worker agent rating of preparation effectiveness (1-5 scale)"
+        },
+        "preparation_decisions_used": {
+          "type": "array",
+          "description": "Preparation decisions that were applied",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "constraint_violations": {
+          "type": "array",
+          "description": "Preparation constraints that were violated during implementation",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "scope_drift_detected": {
+          "type": "boolean",
+          "description": "Whether implementation drifted from intended scope"
+        },
+        "validation_gate_results": {
+          "type": "object",
+          "description": "Results of validation gates during implementation",
+          "properties": {
+            "gates_passed": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "gates_failed": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            }
+          }
+        },
+        "preparation_feedback": {
+          "type": "object",
+          "description": "Detailed feedback on preparation quality",
+          "properties": {
+            "helpful_aspects": {
+              "type": "array",
+              "description": "Aspects of preparation that were particularly helpful",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "missing_information": {
+              "type": "array",
+              "description": "Information that was missing from preparation",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "improvement_suggestions": {
+              "type": "array",
+              "description": "Suggestions for improving future preparation",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        "time_metrics": {
+          "type": "object",
+          "description": "Time-based effectiveness metrics",
+          "properties": {
+            "preparation_to_start_minutes": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Minutes from preparation completion to implementation start"
+            },
+            "total_implementation_minutes": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Total minutes spent on implementation"
+            },
+            "rework_minutes": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Minutes spent on rework due to preparation issues"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "preparation_effectiveness": {
+      "type": "object",
+      "required": [
+        "overall_preparation_quality",
+        "session_success_rate",
+        "preparation_impact_assessment"
+      ],
+      "properties": {
+        "overall_preparation_quality": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Overall preparation quality for this session (0.0 = poor, 1.0 = excellent)"
+        },
+        "session_success_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Success rate for tasks in this session (0.0 = all failed, 1.0 = all succeeded)"
+        },
+        "preparation_impact_assessment": {
+          "type": "string",
+          "enum": ["highly_positive", "positive", "neutral", "negative", "highly_negative"],
+          "description": "Assessment of preparation impact on session outcomes"
+        },
+        "preparation_patterns_observed": {
+          "type": "array",
+          "description": "Preparation patterns that were observed during this session",
+          "items": {
+            "$ref": "#/$defs/observed_pattern"
+          }
+        },
+        "template_effectiveness_feedback": {
+          "type": "object",
+          "description": "Feedback on template effectiveness during this session",
+          "patternProperties": {
+            "^[a-zA-Z0-9_-]+$": {
+              "type": "object",
+              "properties": {
+                "template_name": {
+                  "type": "string",
+                  "description": "Name of the template"
+                },
+                "effectiveness_score": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 1.0,
+                  "description": "Effectiveness score for this template"
+                },
+                "usage_outcome": {
+                  "type": "string",
+                  "enum": ["successful", "partially_successful", "unsuccessful"],
+                  "description": "Outcome of using this template"
+                },
+                "improvement_notes": {
+                  "type": "string",
+                  "maxLength": 300,
+                  "description": "Notes on how this template could be improved"
+                }
+              }
+            }
+          }
+        },
+        "learning_insights": {
+          "type": "array",
+          "description": "Insights gained about preparation effectiveness during this session",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "observed_pattern": {
+      "type": "object",
+      "required": [
+        "pattern_type",
+        "pattern_description",
+        "outcome_correlation",
+        "confidence_level"
+      ],
+      "properties": {
+        "pattern_type": {
+          "type": "string",
+          "enum": [
+            "successful_enrichment",
+            "failed_enrichment",
+            "effective_constraint",
+            "ineffective_constraint",
+            "good_decision_authority",
+            "unclear_decision_authority",
+            "helpful_guidance",
+            "missing_guidance"
+          ],
+          "description": "Type of preparation pattern observed"
+        },
+        "pattern_description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Description of the observed pattern"
+        },
+        "outcome_correlation": {
+          "type": "string",
+          "enum": ["positive", "negative", "neutral"],
+          "description": "How this pattern correlated with implementation outcome"
+        },
+        "confidence_level": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence in this pattern observation (0.0 = low, 1.0 = high)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["description", "resolution", "follow_up_needed"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "description": "Description of the issue encountered"
+        },
+        "resolution": {
+          "type": ["string", "null"],
+          "maxLength": 400,
+          "description": "How the issue was resolved, null if unresolved"
+        },
+        "follow_up_needed": {
+          "type": "boolean",
+          "description": "Whether this issue requires follow-up action"
+        },
+        "preparation_related": {
+          "type": "boolean",
+          "description": "Optional: Whether this issue was related to preparation quality"
+        },
+        "preparation_improvement_suggestion": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional: How better preparation could have prevented this issue"
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "version",
+        "total_sessions",
+        "last_session_id",
+        "schema_version"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the journal was first created"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Journal system version"
+        },
+        "total_sessions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of sessions recorded"
+        },
+        "last_session_id": {
+          "type": ["string", "null"],
+          "description": "ID of the most recent session, null if no sessions"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Journal schema version identifier"
+        },
+        "auto_cleanup_enabled": {
+          "type": "boolean",
+          "description": "Whether automatic cleanup of old sessions is enabled"
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of days to retain journal entries"
+        },
+        "preparation_tracking_enabled": {
+          "type": "boolean",
+          "description": "Optional: Whether preparation effectiveness tracking is enabled"
+        },
+        "preparation_feedback_stats": {
+          "type": "object",
+          "description": "Optional: Statistics about preparation feedback collection",
+          "properties": {
+            "sessions_with_preparation_data": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of sessions that include preparation effectiveness data"
+            },
+            "average_preparation_quality": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Average preparation quality score across all tracked sessions"
+            },
+            "average_success_rate": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Average implementation success rate for tracked sessions"
+            },
+            "last_feedback_analysis": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When preparation feedback was last analyzed"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

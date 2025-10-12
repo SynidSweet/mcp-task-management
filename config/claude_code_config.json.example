@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "claude-tasks": {
+      "command": "python",
+      "args": ["/home/petter/.claude/task-sprint-system/mcp-server/server.py"],
+      "cwd": "/home/petter/.claude/task-sprint-system",
+      "env": {
+        "CLAUDE_TASKS_CONFIG": "/home/petter/.claude/task-sprint-system/config.yaml",
+        "PYTHONPATH": "/home/petter/.claude/task-sprint-system/mcp-server"
+      }
+    }
+  }
+}

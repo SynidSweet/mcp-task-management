@@ -1,0 +1,878 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Preparation Quality Feedback Loop Schema",
+  "description": "Schema for tracking preparation quality, implementation outcomes, and continuous learning data in .claude-tasks/preparation_feedback.json",
+  "type": "object",
+  "required": ["preparation_records", "pattern_analysis", "template_evolution", "metadata"],
+  "properties": {
+    "preparation_records": {
+      "type": "array",
+      "description": "Records of preparation decisions and their implementation outcomes",
+      "items": {
+        "$ref": "#/$defs/preparation_record"
+      }
+    },
+    "pattern_analysis": {
+      "$ref": "#/$defs/pattern_analysis"
+    },
+    "template_evolution": {
+      "$ref": "#/$defs/template_evolution"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    }
+  },
+  "$defs": {
+    "preparation_record": {
+      "type": "object",
+      "required": [
+        "record_id",
+        "task_id", 
+        "session_id",
+        "timestamp",
+        "preparation_quality",
+        "implementation_outcome",
+        "learning_data"
+      ],
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "pattern": "^prep-\\d{4}-\\d{2}-\\d{2}-\\d{3}$",
+          "description": "Unique preparation feedback record identifier"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^TASK-\\d{4}-\\d{3}$",
+          "description": "Task that was prepared and implemented"
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^sess-\\d{4}-\\d{2}-\\d{2}-\\d{3}$",
+          "description": "Session where implementation occurred"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When preparation feedback was recorded"
+        },
+        "preparation_quality": {
+          "$ref": "#/$defs/preparation_quality"
+        },
+        "implementation_outcome": {
+          "$ref": "#/$defs/implementation_outcome"
+        },
+        "learning_data": {
+          "$ref": "#/$defs/learning_data"
+        }
+      },
+      "additionalProperties": false
+    },
+    "preparation_quality": {
+      "type": "object",
+      "required": [
+        "enrichment_score",
+        "decision_authority_clarity",
+        "contextual_guidance_quality",
+        "constraint_effectiveness",
+        "anti_pattern_detection"
+      ],
+      "properties": {
+        "enrichment_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Quality score for instruction enrichment (0.0 = poor, 1.0 = excellent)"
+        },
+        "decision_authority_clarity": {
+          "type": "number", 
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Clarity of decision authority assignment (0.0 = unclear, 1.0 = crystal clear)"
+        },
+        "contextual_guidance_quality": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Quality of contextual guidance provided (0.0 = poor, 1.0 = excellent)"
+        },
+        "constraint_effectiveness": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Effectiveness of constraints and boundaries (0.0 = ineffective, 1.0 = highly effective)"
+        },
+        "anti_pattern_detection": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Quality of anti-pattern detection and warnings (0.0 = missed issues, 1.0 = caught all issues)"
+        },
+        "preparation_decisions": {
+          "type": "array",
+          "description": "Specific preparation decisions made",
+          "items": {
+            "$ref": "#/$defs/preparation_decision"
+          }
+        },
+        "template_usage": {
+          "type": "array",
+          "description": "Templates and patterns used in preparation",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "implementation_outcome": {
+      "type": "object",
+      "required": [
+        "success_metrics",
+        "failure_indicators",
+        "worker_feedback",
+        "validation_results"
+      ],
+      "properties": {
+        "success_metrics": {
+          "$ref": "#/$defs/success_metrics"
+        },
+        "failure_indicators": {
+          "$ref": "#/$defs/failure_indicators"
+        },
+        "worker_feedback": {
+          "$ref": "#/$defs/worker_feedback"
+        },
+        "validation_results": {
+          "$ref": "#/$defs/validation_results"
+        },
+        "time_to_completion": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minutes from preparation to successful implementation"
+        },
+        "iteration_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of implementation attempts required"
+        }
+      },
+      "additionalProperties": false
+    },
+    "success_metrics": {
+      "type": "object",
+      "required": [
+        "first_attempt_success",
+        "task_completion_without_rework",
+        "constraint_adherence",
+        "scope_alignment"
+      ],
+      "properties": {
+        "first_attempt_success": {
+          "type": "boolean",
+          "description": "Whether implementation succeeded on first attempt"
+        },
+        "task_completion_without_rework": {
+          "type": "boolean",
+          "description": "Whether task was completed without requiring rework"
+        },
+        "constraint_adherence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "How well implementation adhered to preparation constraints"
+        },
+        "scope_alignment": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "How well implementation matched intended scope"
+        },
+        "worker_satisfaction": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Worker agent satisfaction with preparation quality (1-5 scale)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "failure_indicators": {
+      "type": "object",
+      "required": [
+        "validation_gate_failures",
+        "scope_drift_incidents",
+        "requirement_misalignment",
+        "constraint_violations"
+      ],
+      "properties": {
+        "validation_gate_failures": {
+          "type": "array",
+          "description": "Validation gates that failed during implementation",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "scope_drift_incidents": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of times implementation drifted from intended scope"
+        },
+        "requirement_misalignment": {
+          "type": "boolean",
+          "description": "Whether implementation misaligned with original requirements"
+        },
+        "constraint_violations": {
+          "type": "array",
+          "description": "Preparation constraints that were violated",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "anti_pattern_occurrences": {
+          "type": "array",
+          "description": "Anti-patterns that occurred despite preparation warnings",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "worker_feedback": {
+      "type": "object",
+      "required": [
+        "preparation_helpfulness",
+        "guidance_clarity",
+        "missing_information",
+        "improvement_suggestions"
+      ],
+      "properties": {
+        "preparation_helpfulness": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "How helpful was the preparation (1-5 scale)"
+        },
+        "guidance_clarity": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Clarity of provided guidance (1-5 scale)"
+        },
+        "missing_information": {
+          "type": "array",
+          "description": "Information that was missing from preparation",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "improvement_suggestions": {
+          "type": "array",
+          "description": "Suggestions for improving preparation quality",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "validation_results": {
+      "type": "object",
+      "required": [
+        "gates_passed",
+        "gates_failed",
+        "overall_validation_score"
+      ],
+      "properties": {
+        "gates_passed": {
+          "type": "array",
+          "description": "Validation gates that passed successfully",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "gates_failed": {
+          "type": "array",
+          "description": "Validation gates that failed",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "overall_validation_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Overall validation score (0.0 = all failed, 1.0 = all passed)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "preparation_decision": {
+      "type": "object",
+      "required": [
+        "decision_type",
+        "decision_outcome",
+        "confidence_level",
+        "contextual_factors"
+      ],
+      "properties": {
+        "decision_type": {
+          "type": "string",
+          "enum": [
+            "instruction_enrichment",
+            "decision_authority_assignment", 
+            "contextual_guidance_addition",
+            "constraint_definition",
+            "anti_pattern_warning"
+          ],
+          "description": "Type of preparation decision made"
+        },
+        "decision_outcome": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "What decision was made and why"
+        },
+        "confidence_level": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence in this decision (0.0 = low, 1.0 = high)"
+        },
+        "contextual_factors": {
+          "type": "array",
+          "description": "Factors that influenced this decision",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "effectiveness_rating": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "How effective this decision was in hindsight (1-5 scale)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "learning_data": {
+      "type": "object",
+      "required": [
+        "success_patterns",
+        "failure_patterns",
+        "template_effectiveness",
+        "decision_quality_correlation"
+      ],
+      "properties": {
+        "success_patterns": {
+          "type": "array",
+          "description": "Patterns that contributed to success",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "failure_patterns": {
+          "type": "array",
+          "description": "Patterns that contributed to failure",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "template_effectiveness": {
+          "type": "object",
+          "description": "Effectiveness ratings for templates used",
+          "patternProperties": {
+            "^[a-zA-Z0-9_-]+$": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "decision_quality_correlation": {
+          "type": "number",
+          "minimum": -1.0,
+          "maximum": 1.0,
+          "description": "Correlation between preparation quality and outcome success"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pattern_analysis": {
+      "type": "object",
+      "required": [
+        "identified_patterns",
+        "pattern_effectiveness",
+        "trend_analysis",
+        "last_updated"
+      ],
+      "properties": {
+        "identified_patterns": {
+          "type": "array",
+          "description": "Patterns identified from preparation outcome data",
+          "items": {
+            "$ref": "#/$defs/identified_pattern"
+          }
+        },
+        "pattern_effectiveness": {
+          "type": "object",
+          "description": "Effectiveness scores for different pattern types",
+          "properties": {
+            "instruction_enrichment_patterns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pattern_effectiveness_score"
+              }
+            },
+            "decision_authority_patterns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pattern_effectiveness_score"
+              }
+            },
+            "contextual_guidance_patterns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pattern_effectiveness_score"
+              }
+            }
+          }
+        },
+        "trend_analysis": {
+          "$ref": "#/$defs/trend_analysis"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When pattern analysis was last updated"
+        }
+      },
+      "additionalProperties": false
+    },
+    "identified_pattern": {
+      "type": "object",
+      "required": [
+        "pattern_id",
+        "pattern_type",
+        "pattern_description",
+        "success_rate",
+        "confidence_level",
+        "sample_size"
+      ],
+      "properties": {
+        "pattern_id": {
+          "type": "string",
+          "pattern": "^pattern-\\d{4}-\\d{3}$",
+          "description": "Unique pattern identifier"
+        },
+        "pattern_type": {
+          "type": "string",
+          "enum": [
+            "success_pattern",
+            "failure_pattern",
+            "mixed_pattern"
+          ],
+          "description": "Whether this pattern correlates with success or failure"
+        },
+        "pattern_description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Description of the identified pattern"
+        },
+        "success_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Success rate when this pattern is present"
+        },
+        "confidence_level": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Statistical confidence in this pattern"
+        },
+        "sample_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of preparation records contributing to this pattern"
+        },
+        "contextual_conditions": {
+          "type": "array",
+          "description": "Conditions under which this pattern applies",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "pattern_effectiveness_score": {
+      "type": "object",
+      "required": [
+        "pattern_name",
+        "effectiveness_score",
+        "usage_frequency",
+        "improvement_trend"
+      ],
+      "properties": {
+        "pattern_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Name of the pattern"
+        },
+        "effectiveness_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Overall effectiveness score for this pattern"
+        },
+        "usage_frequency": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "How frequently this pattern is used"
+        },
+        "improvement_trend": {
+          "type": "string",
+          "enum": ["improving", "stable", "declining"],
+          "description": "Trend in effectiveness over time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "trend_analysis": {
+      "type": "object",
+      "required": [
+        "overall_preparation_quality_trend",
+        "success_rate_trend",
+        "template_effectiveness_trend",
+        "analysis_period"
+      ],
+      "properties": {
+        "overall_preparation_quality_trend": {
+          "type": "string",
+          "enum": ["improving", "stable", "declining"],
+          "description": "Trend in overall preparation quality"
+        },
+        "success_rate_trend": {
+          "type": "string", 
+          "enum": ["improving", "stable", "declining"],
+          "description": "Trend in implementation success rates"
+        },
+        "template_effectiveness_trend": {
+          "type": "string",
+          "enum": ["improving", "stable", "declining"], 
+          "description": "Trend in template effectiveness"
+        },
+        "analysis_period": {
+          "type": "object",
+          "required": ["start_date", "end_date"],
+          "properties": {
+            "start_date": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Start of analysis period"
+            },
+            "end_date": {
+              "type": "string",
+              "format": "date-time",
+              "description": "End of analysis period"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "template_evolution": {
+      "type": "object",
+      "required": [
+        "template_versions",
+        "evolution_history",
+        "effectiveness_improvements",
+        "last_evolution_date"
+      ],
+      "properties": {
+        "template_versions": {
+          "type": "array",
+          "description": "Different versions of preparation templates",
+          "items": {
+            "$ref": "#/$defs/template_version"
+          }
+        },
+        "evolution_history": {
+          "type": "array",
+          "description": "History of template changes and improvements",
+          "items": {
+            "$ref": "#/$defs/evolution_record"
+          }
+        },
+        "effectiveness_improvements": {
+          "type": "array",
+          "description": "Documented effectiveness improvements from template evolution",
+          "items": {
+            "$ref": "#/$defs/effectiveness_improvement"
+          }
+        },
+        "last_evolution_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When templates were last evolved based on feedback"
+        }
+      },
+      "additionalProperties": false
+    },
+    "template_version": {
+      "type": "object",
+      "required": [
+        "version_id",
+        "template_name",
+        "version_number",
+        "effectiveness_score",
+        "usage_count",
+        "created_date"
+      ],
+      "properties": {
+        "version_id": {
+          "type": "string",
+          "pattern": "^template-v\\d+-\\d{8}$",
+          "description": "Unique template version identifier"
+        },
+        "template_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Name of the template"
+        },
+        "version_number": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version number"
+        },
+        "effectiveness_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Effectiveness score for this template version"
+        },
+        "usage_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of times this template version was used"
+        },
+        "created_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this template version was created"
+        },
+        "improvements": {
+          "type": "array",
+          "description": "Improvements made in this version",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "evolution_record": {
+      "type": "object",
+      "required": [
+        "evolution_id",
+        "template_name",
+        "change_type",
+        "change_description",
+        "trigger_data",
+        "evolution_date"
+      ],
+      "properties": {
+        "evolution_id": {
+          "type": "string",
+          "pattern": "^evol-\\d{4}-\\d{2}-\\d{2}-\\d{3}$",
+          "description": "Unique evolution record identifier"
+        },
+        "template_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Name of the evolved template"
+        },
+        "change_type": {
+          "type": "string",
+          "enum": [
+            "improvement",
+            "bug_fix",
+            "pattern_addition",
+            "constraint_refinement",
+            "guidance_enhancement"
+          ],
+          "description": "Type of evolutionary change made"
+        },
+        "change_description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Description of what changed and why"
+        },
+        "trigger_data": {
+          "type": "object",
+          "description": "Data that triggered this evolution",
+          "properties": {
+            "pattern_id": {
+              "type": "string",
+              "description": "Pattern that triggered the evolution"
+            },
+            "success_rate_threshold": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Success rate threshold that was crossed"
+            },
+            "sample_size": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Sample size of data triggering evolution"
+            }
+          }
+        },
+        "evolution_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the evolution occurred"
+        }
+      },
+      "additionalProperties": false
+    },
+    "effectiveness_improvement": {
+      "type": "object",
+      "required": [
+        "improvement_id",
+        "template_name",
+        "before_score",
+        "after_score",
+        "improvement_percentage",
+        "validation_period"
+      ],
+      "properties": {
+        "improvement_id": {
+          "type": "string",
+          "pattern": "^improve-\\d{4}-\\d{2}-\\d{2}-\\d{3}$",
+          "description": "Unique improvement record identifier"
+        },
+        "template_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Name of the improved template"
+        },
+        "before_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Effectiveness score before improvement"
+        },
+        "after_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Effectiveness score after improvement"
+        },
+        "improvement_percentage": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Percentage improvement in effectiveness"
+        },
+        "validation_period": {
+          "type": "object",
+          "required": ["start_date", "end_date"],
+          "properties": {
+            "start_date": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Start of validation period"
+            },
+            "end_date": {
+              "type": "string",
+              "format": "date-time",
+              "description": "End of validation period"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "version",
+        "total_records",
+        "last_analysis_date",
+        "schema_version"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the feedback system was first created"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Feedback system version"
+        },
+        "total_records": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of preparation feedback records"
+        },
+        "last_analysis_date": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When pattern analysis was last performed"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Schema version identifier"
+        },
+        "learning_enabled": {
+          "type": "boolean",
+          "description": "Whether automatic learning and template evolution is enabled"
+        },
+        "analysis_frequency": {
+          "type": "string",
+          "enum": ["daily", "weekly", "monthly"],
+          "description": "Frequency of automatic pattern analysis"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,1 @@
+"""MCP tool parameter and response schemas"""
