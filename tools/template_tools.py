@@ -1,117 +1,338 @@
-"""Template management MCP tools - Simplified architecture"""
+"""Template management MCP tools - Normalized schema architecture
+
+This module provides tools for managing task and sprint templates using normalized
+database tables (template_tasks, template_sprints) that mirror the structure of
+actual tasks and sprints.
+
+Key Features:
+- Templates stored in queryable normalized tables
+- Support for template composition (templates referencing other templates)
+- Unlimited nesting depth with circular reference detection
+- Entry tasks vs nested tasks distinction
+"""
+
 import json
 import logging
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from pathlib import Path
+from datetime import datetime
 
 from core.project_manager import ProjectManager
-from utils.helpers import handle_error
+from utils.helpers import handle_error, get_timestamp, create_task_id, create_sprint_id, load_json_data, save_json_data
 from utils.validation_wrapper import validation_wrapper
 
 logger = logging.getLogger(__name__)
 
-def register_template_tools(mcp, project_manager: ProjectManager):
-    """Register template tools with simple pattern"""
+# Database client (imported on demand to avoid circular imports)
+def get_db_client():
+    """Get Supabase database client"""
+    from tools.document_tools import get_supabase_client
+    client, _ = get_supabase_client()
+    return client
+
+
+def register_template_tools(mcp, project_manager: ProjectManager, tool_filter=None):
+    """Register template tools with MCP server"""
+    
+    # ========================================================================
+    # TASK TEMPLATE TOOLS
+    # ========================================================================
     
     @validation_wrapper(require_machine_id=True, require_project=True)
     @mcp.tool()
-    async def template_list(scope: str = "all") -> Dict[str, Any]:
-        """List available task templates by scope (global/project/all)"""
+    async def template_list(
+        scope: str = "all",
+        category: str = None,
+        entry_tasks_only: bool = True
+    ) -> Dict[str, Any]:
+        """
+        List available task templates from normalized database.
+
+        Args:
+            scope: Filter by scope ("all", "global", "project")
+            category: Filter by category (e.g., "infrastructure", "quality")
+            entry_tasks_only: If True, only show entry tasks (not nested subtasks)
+
+        Returns:
+            List of task templates with metadata
+        """
         try:
+            client = get_db_client()
             
-            # Use legacy file scanning for reliable template discovery
-            return await _legacy_template_list(project_manager, scope)
+            # Build query
+            query = client.table('template_tasks').select(
+                'template_id, template_name, description, category, scope, '
+                'is_entry_task, variables, child_template_ids, references_template_id'
+            )
             
+            # Apply filters
+            if scope != "all":
+                query = query.eq('scope', scope)
+            
+            if category:
+                query = query.eq('category', category)
+            
+            if entry_tasks_only:
+                query = query.eq('is_entry_task', True)
+            
+            # Execute query
+            result = query.execute()
+            
+            # Format response
+            templates = []
+            for task in result.data:
+                template_summary = {
+                    "name": task['template_id'],
+                    "display_name": task['template_name'],
+                    "description": task['description'] or "No description",
+                    "category": task['category'],
+                    "scope": task['scope'],
+                    "variables_count": len(task.get('variables', [])),
+                    "child_count": len(task.get('child_template_ids', [])),
+                    "is_reference": task.get('references_template_id') is not None,
+                    "template_type": "task"
+                }
+                templates.append(template_summary)
+            
+            logger.info(f"Listed {len(templates)} task templates (scope={scope}, entry_only={entry_tasks_only})")
+            return {
+                "status": "success",
+                "templates": templates,
+                "count": len(templates),
+                "scope": scope,
+                "entry_tasks_only": entry_tasks_only
+            }
+
         except Exception as e:
             return handle_error(e, "template_list")
+
+    @mcp.tool()
+    async def template_get(
+        template_id: str,
+        resolve_references: bool = True,
+        resolve_children: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Get a task template with optional resolution of references and children.
+        
+        Args:
+            template_id: The template_id to retrieve
+            resolve_references: If True, recursively resolve referenced templates
+            resolve_children: If True, include resolved children in response
+        
+        Returns:
+            Complete template definition with resolved structure
+        """
+        try:
+            client = get_db_client()
+            
+            # Load main template
+            result = client.table('template_tasks').select('*').eq('template_id', template_id).execute()
+            
+            if not result.data:
+                return {
+                    "status": "error",
+                    "error": f"Template '{template_id}' not found",
+                    "template_id": template_id
+                }
+            
+            template_data = result.data[0]
+            
+            # Resolve references and children if requested
+            if resolve_references or resolve_children:
+                template_data = await _resolve_template_task_full(
+                    template_id,
+                    resolve_refs=resolve_references,
+                    resolve_children=resolve_children
+                )
+            
+            logger.info(f"Retrieved template: {template_id} (resolve_refs={resolve_references}, resolve_children={resolve_children})")
+            return {
+                "status": "success",
+                "template": template_data,
+                "template_id": template_id
+            }
+
+        except Exception as e:
+            return handle_error(e, "template_get")
+    
+    # ========================================================================
+    # SPRINT TEMPLATE TOOLS
+    # ========================================================================
     
     @validation_wrapper(require_machine_id=True, require_project=True)
     @mcp.tool()
-    async def sprint_template_list(scope: str = "all") -> Dict[str, Any]:
-        """List available sprint templates by scope (global/project/all)"""
+    async def sprint_template_list(
+        scope: str = "all"
+    ) -> Dict[str, Any]:
+        """
+        List available sprint templates from normalized database.
+
+        Args:
+            scope: Filter by scope ("all", "global", "project")
+
+        Returns:
+            List of sprint templates with metadata
+        """
         try:
+            client = get_db_client()
             
-            # Use legacy file scanning for sprint template discovery
-            return await _legacy_sprint_template_list(project_manager, scope)
+            # Build query
+            query = client.table('template_sprints').select(
+                'template_id, template_name, description, scope, '
+                'variables, task_ids'
+            )
             
+            # Apply scope filter
+            if scope != "all":
+                query = query.eq('scope', scope)
+            
+            # Execute query
+            result = query.execute()
+            
+            # Format response
+            templates = []
+            for sprint in result.data:
+                template_summary = {
+                    "name": sprint['template_id'],
+                    "display_name": sprint['template_name'],
+                    "description": sprint['description'] or "No description",
+                    "scope": sprint['scope'],
+                    "variables_count": len(sprint.get('variables', [])),
+                    "tasks_count": len(sprint.get('task_ids', [])),
+                    "template_type": "sprint"
+                }
+                templates.append(template_summary)
+            
+            logger.info(f"Listed {len(templates)} sprint templates (scope={scope})")
+            return {
+                "status": "success",
+                "templates": templates,
+                "count": len(templates),
+                "scope": scope,
+                "type": "sprint_template"
+            }
+
         except Exception as e:
             return handle_error(e, "sprint_template_list")
     
     @mcp.tool()
-    async def template_get(template_name: str) -> Dict[str, Any]:
-        """Get complete template definition with metadata and source information"""
+    async def sprint_template_get(
+        template_id: str,
+        resolve_tasks: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Get a sprint template with optional task resolution.
+
+        Args:
+            template_id: The sprint template_id to retrieve
+            resolve_tasks: If True, resolve all assigned task templates
+
+        Returns:
+            Complete sprint template with resolved tasks
+        """
         try:
-            # Use legacy file scanning for reliable template retrieval
-            return await _legacy_template_get(project_manager, template_name)
+            client = get_db_client()
             
-        except Exception as e:
-            return handle_error(e, "template_get")
-    
-    @mcp.tool()
-    async def sprint_template_get(template_name: str) -> Dict[str, Any]:
-        """Get complete sprint template definition with metadata and source information"""
-        try:
-            # Use legacy file scanning for sprint template retrieval
-            return await _legacy_sprint_template_get(project_manager, template_name)
+            # Load sprint template
+            result = client.table('template_sprints').select('*').eq('template_id', template_id).execute()
             
+            if not result.data:
+                return {
+                    "status": "error",
+                    "error": f"Sprint template '{template_id}' not found",
+                    "template_id": template_id
+                }
+            
+            sprint_data = result.data[0]
+            
+            # Resolve tasks if requested
+            if resolve_tasks:
+                resolved_tasks = []
+                for task_id in sprint_data.get('task_ids', []):
+                    task = await _resolve_template_task_full(task_id, resolve_refs=True, resolve_children=True)
+                    resolved_tasks.append(task)
+
+                sprint_data['resolved_tasks'] = resolved_tasks
+            
+            logger.info(f"Retrieved sprint template: {template_id} (resolve_tasks={resolve_tasks})")
+            return {
+                "status": "success",
+                "template": sprint_data,
+                "template_id": template_id,
+                "type": "sprint_template"
+            }
+
         except Exception as e:
             return handle_error(e, "sprint_template_get")
     
+    # ========================================================================
+    # TEMPLATE INSTANTIATION TOOLS
+    # ========================================================================
+    
     @mcp.tool()
     async def task_create_from_template(
-        template_name: str,
+        template_id: str,
         variables: Dict[str, Any] = None,
         sprint_id: str = None,
         priority_override: str = None
     ) -> Dict[str, Any]:
-        """Create task hierarchy from template with variable substitution and store in task system"""
+        """
+        Create actual task(s) from a task template.
+        
+        Args:
+            template_id: The task template to instantiate
+            variables: Variable values for substitution
+            sprint_id: Optional sprint to assign tasks to
+            priority_override: Optional priority override
+        
+        Returns:
+            Created task IDs and details
+        """
         try:
             if variables is None:
                 variables = {}
             
-            # Get template using legacy method
-            template_result = await _legacy_template_get(project_manager, template_name)
-            if template_result.get("status") != "success":
-                return template_result
+            # Load and resolve template
+            template_data = await _resolve_template_task_full(
+                template_id,
+                resolve_refs=True,
+                resolve_children=True
+            )
             
-            template_data = template_result["template"]
-            
-            # Validate variables against template
-            metadata = template_data.get("metadata", {})
-            template_variables = metadata.get("variables", [])
-            
-            # Check for missing required variables
+            # Validate required variables
             missing_vars = []
-            for var_def in template_variables:
-                var_name = var_def["name"]
-                if var_def.get("required", True) and var_name not in variables:
-                    if "default" not in var_def:
+            for var_def in template_data.get('variables', []):
+                var_name = var_def.get('name')
+                if var_def.get('required', True) and var_name not in variables:
+                    if 'default' not in var_def:
                         missing_vars.append(var_name)
             
             if missing_vars:
                 return {
-                    "status": "error", 
+                    "status": "error",
                     "error": f"Missing required variables: {', '.join(missing_vars)}",
-                    "template_name": template_name,
+                    "template_id": template_id,
                     "missing_variables": missing_vars
                 }
             
-            # Apply variable substitution
-            processed_template = _substitute_template_variables(template_data, variables)
-            
-            # Apply overrides
-            if sprint_id:
-                processed_template["task_definition"]["sprint_id"] = sprint_id
-            if priority_override:
-                processed_template["task_definition"]["priority"] = priority_override
+            # Create tasks from template
+            created_tasks = await _create_tasks_from_template_recursive(
+                template_data,
+                variables,
+                sprint_id,
+                priority_override,
+                project_manager
+            )
             
             return {
                 "status": "success",
-                "template_name": template_name,
-                "processed_template": processed_template,
+                "template_id": template_id,
+                "created_tasks": created_tasks,
+                "tasks_count": len(created_tasks),
                 "variables_applied": variables,
-                "message": f"Successfully processed template '{template_name}' with {len(variables)} variables"
+                "message": f"Successfully created {len(created_tasks)} task(s) from template '{template_id}'"
             }
             
         except Exception as e:
@@ -119,55 +340,57 @@ def register_template_tools(mcp, project_manager: ProjectManager):
     
     @mcp.tool()
     async def sprint_create_from_template(
-        template_name: str,
+        template_id: str,
         variables: Dict[str, Any] = None,
         start_date: str = None,
         duration_override: str = None
     ) -> Dict[str, Any]:
-        """Create sprint from template with variable substitution and store in sprint system"""
+        """
+        Create actual sprint from a sprint template.
+        
+        Args:
+            template_id: The sprint template to instantiate
+            variables: Variable values for substitution
+            start_date: Optional start date override
+            duration_override: Optional duration override
+        
+        Returns:
+            Created sprint and task details
+        """
         try:
             if variables is None:
                 variables = {}
             
-            # Get sprint template using legacy method
-            template_result = await _legacy_sprint_template_get(project_manager, template_name)
-            if template_result.get("status") != "success":
+            # Load sprint template with resolved tasks
+            template_result = await sprint_template_get(template_id, resolve_tasks=True)
+            if template_result.get('status') != 'success':
                 return template_result
             
-            template_data = template_result["template"]
+            template_data = template_result['template']
             
-            # Validate variables against template
-            metadata = template_data.get("metadata", {})
-            template_variables = metadata.get("variables", [])
-            
-            # Check for missing required variables
+            # Validate required variables
             missing_vars = []
-            for var_def in template_variables:
-                var_name = var_def["name"]
-                if var_def.get("required", True) and var_name not in variables:
-                    if "default" not in var_def:
+            for var_def in template_data.get('variables', []):
+                var_name = var_def.get('name')
+                if var_def.get('required', True) and var_name not in variables:
+                    if 'default' not in var_def:
                         missing_vars.append(var_name)
             
             if missing_vars:
                 return {
-                    "status": "error", 
+                    "status": "error",
                     "error": f"Missing required variables: {', '.join(missing_vars)}",
-                    "template_name": template_name,
+                    "template_id": template_id,
                     "missing_variables": missing_vars
                 }
             
-            # Apply variable substitution
-            processed_template = _substitute_template_variables(template_data, variables)
-            
-            # Apply overrides
-            if start_date:
-                processed_template["sprint_definition"]["start_date"] = start_date
-            if duration_override:
-                processed_template["sprint_definition"]["duration"] = duration_override
-            
-            # Create the actual sprint using the processed template
-            sprint_result = await _create_sprint_from_processed_template(
-                project_manager, processed_template, template_name, variables
+            # Create sprint from template
+            sprint_result = await _create_sprint_from_template_full(
+                template_data,
+                variables,
+                start_date,
+                duration_override,
+                project_manager
             )
             
             return sprint_result
@@ -175,130 +398,143 @@ def register_template_tools(mcp, project_manager: ProjectManager):
         except Exception as e:
             return handle_error(e, "sprint_create_from_template")
 
-async def _legacy_template_list(project_manager: ProjectManager, scope: str) -> Dict[str, Any]:
-    """Template listing using dual storage format."""
-    templates = []
-    
-    # Get project path
-    if hasattr(project_manager, 'project_path') and project_manager.project_path:
-        project_dir = Path(project_manager.project_path)
-    else:
-        project_dir = Path('.')
-    
-    # Check project templates (dual storage format)
-    if scope in ["all", "project"]:
-        project_templates_file = project_dir / ".claude-tasks" / "templates" / "task_templates.json"
-        if project_templates_file.exists():
-            templates.extend(_scan_dual_storage_templates(project_templates_file, "project"))
-    
-    # Check global templates (dual storage format)
-    if scope in ["all", "global"]:
-        global_templates_file = Path.home() / ".claude" / ".claude-tasks" / "templates" / "task_templates.json"
-        if global_templates_file.exists():
-            templates.extend(_scan_dual_storage_templates(global_templates_file, "global"))
-    
-    logger.info(f"Listed {len(templates)} templates from scope: {scope} (legacy)")
-    return {
-        "status": "success",
-        "templates": templates,
-        "count": len(templates),
-        "scope": scope,
-        "mode": "legacy"
-    }
 
-async def _legacy_template_get(project_manager: ProjectManager, template_name: str) -> Dict[str, Any]:
-    """Template retrieval using dual storage format."""
-    # Get project path
-    if hasattr(project_manager, 'project_path') and project_manager.project_path:
-        project_dir = Path(project_manager.project_path)
-    else:
-        project_dir = Path('.')
-    
-    # Look for template in dual storage format (project first, then global)
-    template_data = None
-    source = None
-    
-    # Check project templates (dual storage format)
-    project_templates_file = project_dir / ".claude-tasks" / "templates" / "task_templates.json"
-    if project_templates_file.exists():
-        template_data = _get_template_from_dual_storage(project_templates_file, template_name)
-        if template_data:
-            source = "project"
-    
-    # Check global templates if not found (dual storage format)
-    if not template_data:
-        global_templates_file = Path.home() / ".claude" / ".claude-tasks" / "templates" / "task_templates.json"
-        if global_templates_file.exists():
-            template_data = _get_template_from_dual_storage(global_templates_file, template_name)
-            if template_data:
-                source = "global"
-    
-    if not template_data:
-        return {
-            "status": "error",
-            "error": f"Template '{template_name}' not found",
-            "template_name": template_name
-        }
-    
-    template_data["source"] = source
-    
-    logger.info(f"Retrieved template: {template_name} (legacy)")
-    return {
-        "status": "success",
-        "template": template_data,
-        "template_name": template_name,
-        "source": source
-    }
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
-def _scan_templates(directory: Path, source: str) -> List[Dict[str, Any]]:
-    """Scan directory for template files and return metadata."""
-    templates = []
+async def _resolve_template_task_full(
+    template_id: str,
+    resolve_refs: bool = True,
+    resolve_children: bool = True,
+    visited: Optional[Set[str]] = None
+) -> Dict[str, Any]:
+    """
+    Fully resolve a template task including references and children.
     
-    for template_file in directory.glob("*.json"):
-        try:
-            template_data = _load_template_file(template_file)
-            if template_data and "metadata" in template_data:
-                metadata = template_data["metadata"]
-                template_summary = {
-                    "name": metadata.get("name", template_file.stem),
-                    "description": metadata.get("description", "No description"),
-                    "category": metadata.get("category", "general"),
-                    "source": source,
-                    "variables_count": len(metadata.get("variables", [])),
-                    "subtasks_count": len(template_data.get("subtasks", [])),
-                    "requirements_count": len(template_data.get("requirements", [])),
-                    "version": metadata.get("version", "1.0")
-                }
-                templates.append(template_summary)
-        except Exception as e:
-            logger.warning(f"Failed to load template {template_file}: {e}")
+    Args:
+        template_id: Template to resolve
+        resolve_refs: If True, resolve referenced templates
+        resolve_children: If True, recursively resolve children
+        visited: Set of visited template IDs (for circular detection)
     
-    return templates
+    Returns:
+        Fully resolved template data
+    
+    Raises:
+        ValueError: If circular reference detected
+    """
+    if visited is None:
+        visited = set()
+    
+    # Circular reference detection
+    if template_id in visited:
+        cycle_path = " -> ".join(visited) + f" -> {template_id}"
+        raise ValueError(f"Circular reference detected: {cycle_path}")
+    
+    visited.add(template_id)
+    
+    # Load template from database
+    client = get_db_client()
+    result = client.table('template_tasks').select('*').eq('template_id', template_id).execute()
+    
+    if not result.data:
+        raise ValueError(f"Template '{template_id}' not found")
+    
+    task = dict(result.data[0])  # Make mutable copy
+    
+    # If this is a reference, load the referenced template
+    if task.get('references_template_id') and resolve_refs:
+        referenced = await _resolve_template_task_full(
+            task['references_template_id'],
+            resolve_refs=True,
+            resolve_children=resolve_children,
+            visited=visited.copy()  # Copy to avoid cross-branch pollution
+        )
+        
+        # Merge: use referenced template's content with local overrides
+        task = _merge_template_reference(task, referenced)
+    
+    # Resolve children if requested
+    if resolve_children and task.get('child_template_ids'):
+        resolved_children = []
+        for child_id in task['child_template_ids']:
+            try:
+                child = await _resolve_template_task_full(
+                    child_id,
+                    resolve_refs=resolve_refs,
+                    resolve_children=True,
+                    visited=visited.copy()
+                )
+                resolved_children.append(child)
+            except Exception as e:
+                logger.warning(f"Failed to resolve child {child_id}: {e}")
+        
+        task['resolved_children'] = resolved_children
+    
+    return task
 
-def _load_template_file(file_path: Path) -> Optional[Dict[str, Any]]:
-    """Load template from JSON file."""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load template {file_path}: {e}")
-        return None
 
-def _substitute_template_variables(template_data: Dict[str, Any], variables: Dict[str, Any]) -> Dict[str, Any]:
-    """Substitute template variables in the template data."""
+def _merge_template_reference(ref_task: Dict[str, Any], referenced_task: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge a reference task with its referenced template.
+    
+    The reference task can override certain fields from the referenced template.
+    
+    Args:
+        ref_task: The task that references another template
+        referenced_task: The template being referenced
+    
+    Returns:
+        Merged template data
+    """
+    merged = dict(referenced_task)  # Start with referenced template
+    
+    # Override with reference task's values (if not empty)
+    if ref_task.get('title'):
+        merged['title'] = ref_task['title']
+    if ref_task.get('task_description'):
+        merged['task_description'] = ref_task['task_description']
+    if ref_task.get('priority'):
+        merged['priority'] = ref_task['priority']
+    if ref_task.get('notes'):
+        merged['notes'] = ref_task['notes']
+    
+    # Merge variables (reference overrides take precedence)
+    merged['override_variables'] = ref_task.get('override_variables', {})
+    
+    # Keep reference metadata
+    merged['_is_reference'] = True
+    merged['_reference_to'] = ref_task['references_template_id']
+    merged['_reference_id'] = ref_task['template_id']
+    
+    return merged
+
+
+def _substitute_variables(template_data: Dict[str, Any], variables: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Substitute variables in template data.
+    
+    Recursively replaces {{variable_name}} placeholders with actual values.
+    
+    Args:
+        template_data: Template data containing placeholders
+        variables: Variable values for substitution
+    
+    Returns:
+        Template data with variables substituted
+    """
     import copy
     
-    # Deep copy to avoid modifying original
     result = copy.deepcopy(template_data)
     
     # Add default values for missing optional variables
-    metadata = template_data.get("metadata", {})
-    for var_def in metadata.get("variables", []):
-        var_name = var_def["name"]
-        if var_name not in variables and "default" in var_def:
-            variables[var_name] = var_def["default"]
+    for var_def in template_data.get('variables', []):
+        var_name = var_def.get('name')
+        if var_name not in variables and 'default' in var_def:
+            variables[var_name] = var_def['default']
     
-    # Recursively substitute variables
+    # Recursively substitute
     def substitute_in_obj(obj):
         if isinstance(obj, dict):
             return {k: substitute_in_obj(v) for k, v in obj.items()}
@@ -315,553 +551,173 @@ def _substitute_template_variables(template_data: Dict[str, Any], variables: Dic
     
     return substitute_in_obj(result)
 
-async def _legacy_sprint_template_list(project_manager: ProjectManager, scope: str) -> Dict[str, Any]:
-    """Sprint template listing using dual storage format."""
-    templates = []
+
+async def _create_tasks_from_template_recursive(
+    template_data: Dict[str, Any],
+    variables: Dict[str, Any],
+    sprint_id: Optional[str],
+    priority_override: Optional[str],
+    project_manager: ProjectManager,
+    parent_task_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Create actual tasks from template data recursively.
     
-    # Get project path
-    if hasattr(project_manager, 'project_path') and project_manager.project_path:
-        project_dir = Path(project_manager.project_path)
-    else:
-        project_dir = Path('.')
+    Args:
+        template_data: Resolved template data
+        variables: Variable values
+        sprint_id: Optional sprint assignment
+        priority_override: Optional priority override
+        project_manager: Project manager instance
+        parent_task_id: Optional parent task ID for hierarchy
     
-    # Check project sprint templates (dual storage format)
-    if scope in ["all", "project"]:
-        project_templates_file = project_dir / ".claude-tasks" / "templates" / "sprint_templates.json"
-        if project_templates_file.exists():
-            templates.extend(_scan_dual_storage_sprint_templates(project_templates_file, "project"))
+    Returns:
+        List of created tasks
+    """
+    # Substitute variables
+    processed = _substitute_variables(template_data, variables)
     
-    # Check global sprint templates (dual storage format)
-    if scope in ["all", "global"]:
-        global_templates_file = Path.home() / ".claude" / ".claude-tasks" / "templates" / "sprint_templates.json"
-        if global_templates_file.exists():
-            templates.extend(_scan_dual_storage_sprint_templates(global_templates_file, "global"))
+    # Load tasks data
+    tasks_file = project_manager.get_data_file('tasks')
+    tasks_data = load_json_data(tasks_file)
+    if 'tasks' not in tasks_data:
+        tasks_data['tasks'] = []
     
-    logger.info(f"Listed {len(templates)} sprint templates from scope: {scope} (legacy)")
-    return {
-        "status": "success",
-        "templates": templates,
-        "count": len(templates),
-        "scope": scope,
-        "mode": "legacy",
-        "type": "sprint_template"
+    # Create main task
+    task_id = create_task_id()
+    actual_task = {
+        'id': task_id,
+        'title': processed.get('title', 'Untitled Task'),
+        'description': processed.get('task_description', ''),
+        'priority': priority_override or processed.get('priority', 'medium'),
+        'status': 'pending',
+        'notes': processed.get('notes', ''),
+        'sprint_id': sprint_id,
+        'parent_task_id': parent_task_id,
+        'child_task_ids': [],
+        'dependencies': processed.get('dependencies', {'blocks': [], 'blocked_by': [], 'related': []}),
+        'created_at': get_timestamp(),
+        'updated_at': get_timestamp(),
+        'completed_at': None
     }
-
-async def _legacy_sprint_template_get(project_manager: ProjectManager, template_name: str) -> Dict[str, Any]:
-    """Sprint template retrieval using dual storage format."""
-    # Get project path
-    if hasattr(project_manager, 'project_path') and project_manager.project_path:
-        project_dir = Path(project_manager.project_path)
-    else:
-        project_dir = Path('.')
     
-    # Look for sprint template in dual storage format (project first, then global)
-    template_data = None
-    source = None
+    # Save task
+    tasks_data['tasks'].append(actual_task)
+    save_json_data(tasks_file, tasks_data)
     
-    # Check project sprint templates (dual storage format)
-    project_templates_file = project_dir / ".claude-tasks" / "templates" / "sprint_templates.json"
-    if project_templates_file.exists():
-        template_data = _get_template_from_dual_storage(project_templates_file, template_name)
-        if template_data:
-            source = "project"
+    created_tasks = [actual_task]
+    child_ids = []
     
-    # Check global sprint templates if not found (dual storage format)
-    if not template_data:
-        global_templates_file = Path.home() / ".claude" / ".claude-tasks" / "templates" / "sprint_templates.json"
-        if global_templates_file.exists():
-            template_data = _get_template_from_dual_storage(global_templates_file, template_name)
-            if template_data:
-                source = "global"
+    # Recursively create children
+    if processed.get('resolved_children'):
+        for child_template in processed['resolved_children']:
+            child_tasks = await _create_tasks_from_template_recursive(
+                child_template,
+                variables,
+                sprint_id,
+                None,  # Don't override priority for children
+                project_manager,
+                parent_task_id=task_id
+            )
+            created_tasks.extend(child_tasks)
+            if child_tasks:
+                child_ids.append(child_tasks[0]['id'])
     
-    if not template_data:
-        return {
-            "status": "error",
-            "error": f"Sprint template '{template_name}' not found",
-            "template_name": template_name
-        }
-    
-    # Validate it's a sprint template
-    if template_data.get("metadata", {}).get("category") != "sprint" and "sprint_definition" not in template_data:
-        return {
-            "status": "error",
-            "error": f"Template '{template_name}' is not a valid sprint template",
-            "template_name": template_name
-        }
-    
-    template_data["source"] = source
-    
-    logger.info(f"Retrieved sprint template: {template_name} (legacy)")
-    return {
-        "status": "success",
-        "template": template_data,
-        "template_name": template_name,
-        "source": source,
-        "type": "sprint_template"
-    }
-
-def _scan_sprint_templates(directory: Path, source: str) -> List[Dict[str, Any]]:
-    """Scan directory for sprint template files and return metadata."""
-    templates = []
-    
-    # Look for files named sprint_*.json or files with category "sprint"
-    for template_file in directory.glob("sprint_*.json"):
-        try:
-            template_data = _load_template_file(template_file)
-            if template_data and _is_sprint_template(template_data):
-                metadata = template_data.get("metadata", {})
-                template_name = template_file.stem.replace("sprint_", "")
-                template_summary = {
-                    "name": template_name,
-                    "description": metadata.get("description", "No description"),
-                    "category": "sprint",
-                    "source": source,
-                    "variables_count": len(metadata.get("variables", [])),
-                    "planning_tasks_count": len(template_data.get("planning_tasks", [])),
-                    "milestone_tasks_count": len(template_data.get("milestone_tasks", [])),
-                    "validation_criteria_count": len(template_data.get("validation_criteria", [])),
-                    "version": metadata.get("version", "1.0"),
-                    "template_type": "sprint"
-                }
-                templates.append(template_summary)
-        except Exception as e:
-            logger.warning(f"Failed to load sprint template {template_file}: {e}")
-    
-    # Also check regular .json files that might be sprint templates
-    for template_file in directory.glob("*.json"):
-        if template_file.name.startswith("sprint_"):
-            continue  # Already processed above
-        
-        try:
-            template_data = _load_template_file(template_file)
-            if template_data and _is_sprint_template(template_data):
-                metadata = template_data.get("metadata", {})
-                template_summary = {
-                    "name": metadata.get("name", template_file.stem),
-                    "description": metadata.get("description", "No description"),
-                    "category": "sprint", 
-                    "source": source,
-                    "variables_count": len(metadata.get("variables", [])),
-                    "planning_tasks_count": len(template_data.get("planning_tasks", [])),
-                    "milestone_tasks_count": len(template_data.get("milestone_tasks", [])),
-                    "validation_criteria_count": len(template_data.get("validation_criteria", [])),
-                    "version": metadata.get("version", "1.0"),
-                    "template_type": "sprint"
-                }
-                templates.append(template_summary)
-        except Exception as e:
-            logger.warning(f"Failed to load potential sprint template {template_file}: {e}")
-    
-    return templates
-
-def _is_sprint_template(template_data: Dict[str, Any]) -> bool:
-    """Check if template data represents a sprint template."""
-    metadata = template_data.get("metadata", {})
-    
-    # Check explicit category
-    if metadata.get("category") == "sprint":
-        return True
-    
-    # Check for sprint-specific sections
-    if "sprint_definition" in template_data:
-        return True
-    
-    # Check for sprint-like structure
-    if "planning_tasks" in template_data or "milestone_tasks" in template_data:
-        return True
-    
-    return False
-
-async def _create_sprint_from_processed_template(
-    project_manager: ProjectManager, 
-    processed_template: Dict[str, Any], 
-    template_name: str, 
-    variables: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Create actual sprint from processed template data with robust validation."""
-    from datetime import datetime
-    from utils.helpers import create_sprint_id, get_timestamp, load_json_data, save_json_data
-    import json
-    
-    # Enhanced error tracking
-    operation_log = []
-    
-    try:
-        operation_log.append(f"Starting sprint creation from template '{template_name}'")
-        operation_log.append(f"Project directory: {project_manager.project_path}")
-        
-        # Get sprint data file
-        sprints_file = project_manager.get_data_file('sprints')
-        operation_log.append(f"Sprint file path: {sprints_file}")
-        
-        # Validate project directory and file access
-        if not Path(sprints_file).parent.exists():
-            error_msg = f"Sprint data directory does not exist: {Path(sprints_file).parent}"
-            return {
-                "status": "error",
-                "error": error_msg,
-                "operation_log": operation_log
-            }
-        
-        sprint_data = load_json_data(sprints_file)
-        initial_sprint_count = len(sprint_data.get('sprints', []))
-        operation_log.append(f"Loaded sprint data: {initial_sprint_count} existing sprints")
-        
-        # Create sprint from template
-        sprint_definition = processed_template.get("sprint_definition", {})
-        
-        sprint = {
-            "id": create_sprint_id(),
-            "title": sprint_definition.get("title", f"Sprint from {template_name}"),
-            "description": sprint_definition.get("description", ""),
-            "status": "planned",
-            "created_at": get_timestamp(),
-            "updated_at": get_timestamp(),
-            "template_name": template_name,
-            "template_variables": variables,
-            "start_date": sprint_definition.get("start_date"),
-            "end_date": sprint_definition.get("end_date"),
-            "task_ids": [],
-            "focus": sprint_definition.get("focus", {}),
-            "strategic_direction": sprint_definition.get("strategic_direction", ""),
-            "architectural_themes": sprint_definition.get("architectural_themes", []),
-            "validation_metrics": {
-                "criteria": [],
-                "validation_gates": [],
-                "success_threshold": 0.8
-            },
-            "scope_protection": {
-                "boundaries": {
-                    "in_scope": [],
-                    "out_of_scope": []
-                },
-                "escalation_triggers": [],
-                "approved_changes": []
-            },
-            "progress": {
-                "completion_percentage": 0,
-                "task_status_counts": {
-                    "pending": 0,
-                    "in_progress": 0,
-                    "blocked": 0,
-                    "completed": 0,
-                    "failed": 0
-                },
-                "metrics_snapshot": {}
-            },
-            "history": [{
-                "timestamp": get_timestamp(),
-                "event": "created",
-                "actor": "template_system",
-                "details": f"Sprint created from template '{template_name}'"
-            }]
-        }
-        
-        # Add validation criteria from template
-        validation_criteria = processed_template.get("validation_criteria", [])
-        for i, criterion in enumerate(validation_criteria):
-            sprint["validation_metrics"]["criteria"].append({
-                "id": f"criterion_{i+1}",
-                "description": criterion.get("description", ""),
-                "type": criterion.get("type", "completion"),
-                "target": criterion.get("target", ""),
-                "weight": criterion.get("weight", 0.1),
-                "automated": criterion.get("automated", False)
-            })
-        
-        # Add the sprint
-        if "sprints" not in sprint_data:
-            sprint_data["sprints"] = []
-        sprint_data["sprints"].append(sprint)
-        operation_log.append(f"Added sprint to collection: {len(sprint_data['sprints'])} total sprints")
-        
-        # Save sprint data
-        save_json_data(sprints_file, sprint_data)
-        operation_log.append("Saved sprint data to file")
-        
-        # CRITICAL VALIDATION: Verify sprint was actually saved
-        verification_data = load_json_data(sprints_file)
-        saved_sprints = verification_data.get('sprints', [])
-        sprint_exists = any(s.get('id') == sprint['id'] for s in saved_sprints)
-        
-        if not sprint_exists:
-            error_msg = f"Sprint {sprint['id']} was not found in file after save - possible file corruption or sync conflict"
-            return {
-                "status": "error",
-                "error": error_msg,
-                "operation_log": operation_log,
-                "debug_info": {
-                    "expected_sprint_id": sprint['id'],
-                    "sprints_in_file": len(saved_sprints),
-                    "sprint_ids_found": [s.get('id') for s in saved_sprints]
-                }
-            }
-        
-        operation_log.append(f"✅ Sprint {sprint['id']} confirmed in file")
-        
-        # Create planning and milestone tasks from template with dependency resolution
-        created_task_ids = []
-        template_id_map = {}  # Maps template_id to real task IDs
-        all_created_tasks = []  # Store all created tasks for dependency resolution
-        
-        # Get task storage
-        from utils.helpers import create_task_id, load_json_data, save_json_data
-        tasks_file = project_manager.get_data_file('tasks')
+    # Update parent with child IDs
+    if child_ids:
+        # Reload to get fresh data
         tasks_data = load_json_data(tasks_file)
-        if "tasks" not in tasks_data:
-            tasks_data["tasks"] = []
-        
-        # Collect all template tasks (planning + milestone)
-        all_template_tasks = []
-        planning_tasks = processed_template.get("planning_tasks", [])
-        milestone_tasks = processed_template.get("milestone_tasks", [])
-        
-        for task_template in planning_tasks:
-            task_template["_task_type"] = "planning"
-            all_template_tasks.append(task_template)
-        
-        for task_template in milestone_tasks:
-            task_template["_task_type"] = "milestone"
-            all_template_tasks.append(task_template)
-        
-        # First pass: Create all tasks without dependencies
-        for task_template in all_template_tasks:
-            try:
-                # Generate real task ID using proper incremental format
-                task_id = f"TASK-{datetime.now().strftime('%Y')}-{len(tasks_data['tasks']) + len(all_created_tasks) + 1:03d}"
-                
-                # Map template_id to real ID
-                template_id = task_template.get("template_id")
-                if template_id:
-                    template_id_map[template_id] = task_id
-                
-                # Create task with basic fields
-                task = {
-                    "id": task_id,
-                    "type": "task",
-                    "breakdown_level": 0,
-                    "title": task_template.get("title", "Template Task"),
-                    "description": task_template.get("description", ""),
-                    "priority": task_template.get("priority", "medium"),
-                    "status": "pending",
-                    "created_at": get_timestamp(),
-                    "updated_at": get_timestamp(),
-                    "location": "sprint",
-                    "assignee": None,
-                    "tags": task_template.get("tags", []),
-                    "complexity": task_template.get("complexity", "medium"),
-                    "dependencies": {
-                        "blocks": [],
-                        "blocked_by": [],
-                        "related": []
-                    },
-                    "validation": {
-                        "required": True,
-                        "criteria": [],
-                        "gates": []
-                    },
-                    "context": {
-                        "environment": "production",
-                        "domain": "documentation_audit",
-                        "integration_points": []
-                    },
-                    "history": [{
-                        "timestamp": get_timestamp(),
-                        "event": "created",
-                        "actor": "template_system",
-                        "details": f"Task created from template '{template_name}'"
-                    }],
-                    # Template metadata
-                    "sprint_id": sprint["id"],
-                    "template_generated": True,
-                    "template_name": template_name,
-                    "template_id": template_id,
-                    "template_dependencies": task_template.get("dependencies", []),
-                    "task_type": task_template.get("_task_type"),
-                    "phase": task_template.get("phase"),
-                    "estimated_hours": task_template.get("estimated_hours"),
-                    "milestone_type": task_template.get("milestone_type"),
-                    "schedule_offset": task_template.get("schedule_offset")
-                }
-                
-                all_created_tasks.append(task)
-                created_task_ids.append(task_id)
-                
-            except Exception as e:
-                logger.warning(f"Failed to create task from template: {e}")
-        
-        # Second pass: Resolve template dependencies to real IDs
-        for task in all_created_tasks:
-            template_dependencies = task.get("template_dependencies", [])
-            
-            for template_dep in template_dependencies:
-                if template_dep.startswith("@"):
-                    # Template reference (e.g., "@docs_inventory")
-                    template_ref = template_dep[1:]  # Remove @
-                    real_dep_id = template_id_map.get(template_ref)
-                    
-                    if real_dep_id:
-                        # Add to blocked_by (this task is blocked by the dependency)
-                        task["dependencies"]["blocked_by"].append(real_dep_id)
-                        
-                        # Find the dependency task and add this task to its blocks
-                        for dep_task in all_created_tasks:
-                            if dep_task["id"] == real_dep_id:
-                                dep_task["dependencies"]["blocks"].append(task["id"])
-                                break
-                    else:
-                        logger.warning(f"Template dependency '{template_ref}' not found for task {task['id']}")
-                else:
-                    # Assume it's a real task ID (for cross-template dependencies)
-                    task["dependencies"]["blocked_by"].append(template_dep)
-        
-        # Save all created tasks
-        tasks_data["tasks"].extend(all_created_tasks)
-        save_json_data(tasks_file, tasks_data)
-        
-        # Update sprint with created task IDs
-        sprint["task_ids"] = created_task_ids
-        operation_log.append(f"Assigned {len(created_task_ids)} task IDs to sprint")
-        
-        save_json_data(sprints_file, sprint_data)
-        operation_log.append("Updated sprint data with task assignments")
-        
-        # FINAL VALIDATION: Ensure complete sprint creation success
-        final_verification = load_json_data(sprints_file)
-        final_sprints = final_verification.get('sprints', [])
-        final_sprint = None
-        
-        for s in final_sprints:
-            if s.get('id') == sprint['id']:
-                final_sprint = s
+        for task in tasks_data['tasks']:
+            if task['id'] == task_id:
+                task['child_task_ids'] = child_ids
                 break
-        
-        if not final_sprint:
-            error_msg = f"Sprint {sprint['id']} disappeared after final save - critical sync or storage issue"
-            return {
-                "status": "error",
-                "error": error_msg,
-                "operation_log": operation_log,
-                "debug_info": {
-                    "expected_sprint_id": sprint['id'],
-                    "final_sprints_count": len(final_sprints),
-                    "final_sprint_ids": [s.get('id') for s in final_sprints]
-                }
-            }
-        
-        # Validate task assignments
-        final_task_ids = final_sprint.get('task_ids', [])
-        if len(final_task_ids) != len(created_task_ids):
-            operation_log.append(f"⚠️ Task ID mismatch: expected {len(created_task_ids)}, found {len(final_task_ids)}")
-        
-        operation_log.append(f"✅ Final validation passed: Sprint {sprint['id']} with {len(final_task_ids)} tasks")
-        
-        return {
-            "status": "success",
-            "sprint": final_sprint,  # Return the verified sprint
-            "template_name": template_name,
-            "variables_applied": variables,
-            "tasks_created": len(created_task_ids),
-            "operation_log": operation_log,
-            "message": f"Sprint '{final_sprint['title']}' created successfully from template '{template_name}'"
-        }
-        
-    except Exception as e:
-        import traceback
-        error_traceback = traceback.format_exc()
-        logger.error(f"Error creating sprint from template: {e}")
-        logger.error(f"Full traceback: {error_traceback}")
-        
-        return {
-            "status": "error",
-            "error": f"Failed to create sprint from template: {str(e)}",
-            "template_name": template_name,
-            "operation_log": operation_log,
-            "exception_details": {
-                "exception_type": type(e).__name__,
-                "exception_message": str(e),
-                "traceback": error_traceback
-            },
-            "debug_info": {
-                "project_path": str(project_manager.project_path) if project_manager.project_path else "None",
-                "operation_step": "See operation_log for last successful step"
-            }
-        }
-
-# New dual storage scanning functions
-
-def _scan_dual_storage_templates(file_path: Path, source: str) -> List[Dict[str, Any]]:
-    """Scan dual storage task templates file and return metadata."""
-    templates = []
+        save_json_data(tasks_file, tasks_data)
     
-    try:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        
-        templates_collection = data.get('templates', {})
-        for template_id, template_data in templates_collection.items():
-            metadata = template_data.get('metadata', {})
-            template_summary = {
-                "name": template_id,  # Use template_id as name for consistent lookup
-                "display_name": metadata.get("name", template_id),  # Keep original name for display
-                "description": metadata.get("description", "No description"),
-                "category": metadata.get("category", "general"),
-                "source": source,
-                "variables_count": len(metadata.get("variables", [])),
-                "subtasks_count": len(template_data.get("subtasks", [])),
-                "requirements_count": len(template_data.get("requirements", [])),
-                "version": metadata.get("version", "1.0"),
-                "template_type": "task",
-                "scope": metadata.get("scope", source)
-            }
-            templates.append(template_summary)
-            
-    except Exception as e:
-        logger.warning(f"Failed to load dual storage templates from {file_path}: {e}")
-    
-    return templates
+    return created_tasks
 
-def _scan_dual_storage_sprint_templates(file_path: Path, source: str) -> List[Dict[str, Any]]:
-    """Scan dual storage sprint templates file and return metadata."""
-    templates = []
-    
-    try:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        
-        templates_collection = data.get('templates', {})
-        for template_id, template_data in templates_collection.items():
-            metadata = template_data.get('metadata', {})
-            template_summary = {
-                "name": template_id,  # Use template_id as name for consistent lookup
-                "display_name": metadata.get("name", template_id),  # Keep original name for display
-                "description": metadata.get("description", "No description"),
-                "category": metadata.get("category", "sprint"),
-                "source": source,
-                "variables_count": len(metadata.get("variables", [])),
-                "planning_tasks_count": len(template_data.get("planning_tasks", [])),
-                "milestone_tasks_count": len(template_data.get("milestone_tasks", [])),
-                "validation_criteria_count": len(template_data.get("validation_criteria", [])),
-                "version": metadata.get("version", "1.0"),
-                "template_type": "sprint",
-                "scope": metadata.get("scope", source)
-            }
-            templates.append(template_summary)
-            
-    except Exception as e:
-        logger.warning(f"Failed to load dual storage sprint templates from {file_path}: {e}")
-    
-    return templates
 
-def _get_template_from_dual_storage(file_path: Path, template_name: str) -> Optional[Dict[str, Any]]:
-    """Get specific template from dual storage file."""
-    try:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        
-        templates_collection = data.get('templates', {})
-        return templates_collection.get(template_name)
-        
-    except Exception as e:
-        logger.warning(f"Failed to get template {template_name} from {file_path}: {e}")
-        return None
+async def _create_sprint_from_template_full(
+    template_data: Dict[str, Any],
+    variables: Dict[str, Any],
+    start_date: Optional[str],
+    duration_override: Optional[str],
+    project_manager: ProjectManager
+) -> Dict[str, Any]:
+    """
+    Create actual sprint from template data with all tasks.
+    
+    Args:
+        template_data: Resolved sprint template data
+        variables: Variable values
+        start_date: Optional start date override
+        duration_override: Optional duration override
+        project_manager: Project manager instance
+    
+    Returns:
+        Created sprint and tasks
+    """
+    from utils.helpers import create_sprint_id
+    
+    # Substitute variables
+    processed = _substitute_variables(template_data, variables)
+    
+    # Load sprint data
+    sprints_file = project_manager.get_data_file('sprints')
+    sprint_data = load_json_data(sprints_file)
+    if 'sprints' not in sprint_data:
+        sprint_data['sprints'] = []
+    
+    # Create sprint
+    sprint_id = create_sprint_id()
+    focus = processed.get('focus', {})
+    if not isinstance(focus, dict):
+        focus = {}
+    
+    sprint = {
+        'id': sprint_id,
+        'title': processed.get('title', 'Untitled Sprint'),
+        'description': processed.get('sprint_description', ''),
+        'status': 'planning',
+        'task_ids': [],
+        'start_date': start_date or processed.get('start_date'),
+        'end_date': processed.get('end_date'),
+        'focus': focus,
+        'created_at': get_timestamp(),
+        'updated_at': get_timestamp()
+    }
+    
+    # Save sprint
+    sprint_data['sprints'].append(sprint)
+    save_json_data(sprints_file, sprint_data)
+    
+    # Create tasks from template
+    all_created_tasks = []
+
+    # Create all tasks
+    for task_template in processed.get('resolved_tasks', []):
+        tasks = await _create_tasks_from_template_recursive(
+            task_template,
+            variables,
+            sprint_id,
+            None,
+            project_manager
+        )
+        all_created_tasks.extend(tasks)
+    
+    # Update sprint with task IDs
+    task_ids = [task['id'] for task in all_created_tasks]
+    sprint_data = load_json_data(sprints_file)
+    for s in sprint_data['sprints']:
+        if s['id'] == sprint_id:
+            s['task_ids'] = task_ids
+            break
+    save_json_data(sprints_file, sprint_data)
+    
+    return {
+        'status': 'success',
+        'sprint': sprint,
+        'created_tasks': all_created_tasks,
+        'tasks_count': len(all_created_tasks),
+        'variables_applied': variables,
+        'message': f"Sprint '{sprint['title']}' created successfully from template with {len(all_created_tasks)} tasks"
+    }

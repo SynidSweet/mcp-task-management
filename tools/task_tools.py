@@ -16,58 +16,83 @@ from utils.helpers import (
 from utils.validation_wrapper import require_project_basics
 
 
-def register_task_tools(mcp, project_manager: ProjectManager):
+def register_task_tools(mcp, project_manager: ProjectManager, tool_filter=None):
     """Register task tools with simple pattern"""
-    
-    @require_project_basics()
-    @mcp.tool()
-    async def task_create(
-        title: str,
-        description: str = "",
-        priority: str = "medium"
-    ) -> Dict[str, Any]:
-        """Create task - simplified (no TaskEngine)"""
-        try:
-            
-            if not validate_priority(priority):
-                return {
-                    "status": "error",
-                    "error": f"Invalid priority: {priority}. Must be one of: low, medium, high, critical"
-                }
-            
-            tasks_file = project_manager.get_data_file('tasks')
-            data = load_json_data(tasks_file)
-            
-            # Create task with simple ID generation (handle both 'tasks' and 'task' keys)
-            tasks_list = data.get('tasks', data.get('task', []))
-            task_id = f"TASK-{datetime.now().strftime('%Y')}-{len(tasks_list) + 1:03d}"
-            new_task = {
-                "id": task_id,
-                "title": title,
-                "description": description,
-                "priority": priority,
-                "status": "pending",
-                "created_at": get_timestamp(),
-                "updated_at": get_timestamp()
-            }
-            
-            # Add to appropriate key (handle both formats)
-            if "tasks" in data:
-                data["tasks"].append(new_task)
-            else:
-                if "task" not in data:
-                    data["task"] = []
-                data["task"].append(new_task)
-            save_json_data(tasks_file, data)
 
-            return {
-                "status": "success",
-                "task": new_task,
-                "message": f"Task {task_id} created successfully"
-            }
-            
-        except Exception as e:
-            return handle_error(e, "task_create")
+    if not tool_filter or tool_filter.should_register_tool("task_create"):
+        @require_project_basics()
+        @mcp.tool()
+        async def task_create(
+            title: str,
+            description: str = "",
+            priority: str = "medium",
+            parent_task_id: str = ""
+        ) -> Dict[str, Any]:
+            """Create task with optional parent for hierarchy support"""
+            try:
+                if not validate_priority(priority):
+                    return {
+                        "status": "error",
+                        "error": f"Invalid priority: {priority}. Must be one of: low, medium, high, critical"
+                    }
+
+                tasks_file = project_manager.get_data_file('tasks')
+                data = load_json_data(tasks_file)
+
+                # Validate parent exists if provided
+                parent_task = None
+                if parent_task_id:
+                    tasks_list = data.get('tasks', data.get('task', []))
+                    for t in tasks_list:
+                        if t.get("id") == parent_task_id:
+                            parent_task = t
+                            break
+
+                    if not parent_task:
+                        return {
+                            "status": "error",
+                            "error": f"Parent task {parent_task_id} not found"
+                        }
+
+                # Create task with simple ID generation (handle both 'tasks' and 'task' keys)
+                tasks_list = data.get('tasks', data.get('task', []))
+                task_id = f"TASK-{datetime.now().strftime('%Y')}-{len(tasks_list) + 1:03d}"
+                new_task = {
+                    "id": task_id,
+                    "title": title,
+                    "description": description,
+                    "priority": priority,
+                    "status": "pending",
+                    "parent_task_id": parent_task_id if parent_task_id else None,
+                    "child_task_ids": [],
+                    "created_at": get_timestamp(),
+                    "updated_at": get_timestamp()
+                }
+
+                # Update parent's child_task_ids if this is a subtask
+                if parent_task and parent_task_id:
+                    if "child_task_ids" not in parent_task:
+                        parent_task["child_task_ids"] = []
+                    parent_task["child_task_ids"].append(task_id)
+                    parent_task["updated_at"] = get_timestamp()
+
+                # Add to appropriate key (handle both formats)
+                if "tasks" in data:
+                    data["tasks"].append(new_task)
+                else:
+                    if "task" not in data:
+                        data["task"] = []
+                    data["task"].append(new_task)
+                save_json_data(tasks_file, data)
+
+                return {
+                    "status": "success",
+                    "task": new_task,
+                    "message": f"Task {task_id} created successfully"
+                }
+
+            except Exception as e:
+                return handle_error(e, "task_create")
 
     @require_project_basics()
     @mcp.tool()
@@ -76,9 +101,10 @@ def register_task_tools(mcp, project_manager: ProjectManager):
         status: str = "",
         priority: str = "",
         notes: str = "",
-        dependencies: str = ""  # Format: "blocked_by:TASK-001,TASK-002;blocks:TASK-003"
+        dependencies: str = "",  # Format: "blocked_by:TASK-001,TASK-002;blocks:TASK-003"
+        parent_task_id: str = ""  # New parent (use "none" to clear parent)
     ) -> Dict[str, Any]:
-        """Update task status, priority, notes, or dependencies"""
+        """Update task status, priority, notes, dependencies, or parent"""
         try:
             init_error = check_project_initialized(project_manager)
             if init_error:
@@ -124,6 +150,55 @@ def register_task_tools(mcp, project_manager: ProjectManager):
             if notes:
                 task["notes"] = notes
 
+            # Handle parent_task_id update
+            if parent_task_id:
+                old_parent_id = task.get("parent_task_id")
+
+                # Handle clearing parent
+                if parent_task_id.lower() == "none":
+                    # Remove from old parent's child list
+                    if old_parent_id:
+                        for t in data["tasks"]:
+                            if t.get("id") == old_parent_id:
+                                child_ids = t.get("child_task_ids", [])
+                                if task_id in child_ids:
+                                    child_ids.remove(task_id)
+                                    t["updated_at"] = get_timestamp()
+                                break
+                    task["parent_task_id"] = None
+                else:
+                    # Validate new parent exists
+                    new_parent = None
+                    for t in data["tasks"]:
+                        if t.get("id") == parent_task_id:
+                            new_parent = t
+                            break
+
+                    if not new_parent:
+                        return {
+                            "status": "error",
+                            "error": f"Parent task {parent_task_id} not found"
+                        }
+
+                    # Remove from old parent's child list
+                    if old_parent_id and old_parent_id != parent_task_id:
+                        for t in data["tasks"]:
+                            if t.get("id") == old_parent_id:
+                                child_ids = t.get("child_task_ids", [])
+                                if task_id in child_ids:
+                                    child_ids.remove(task_id)
+                                    t["updated_at"] = get_timestamp()
+                                break
+
+                    # Add to new parent's child list
+                    if "child_task_ids" not in new_parent:
+                        new_parent["child_task_ids"] = []
+                    if task_id not in new_parent["child_task_ids"]:
+                        new_parent["child_task_ids"].append(task_id)
+                        new_parent["updated_at"] = get_timestamp()
+
+                    task["parent_task_id"] = parent_task_id
+
             # Handle dependencies update
             if dependencies:
                 if "dependencies" not in task:
@@ -163,8 +238,8 @@ def register_task_tools(mcp, project_manager: ProjectManager):
     
     @require_project_basics()
     @mcp.tool()
-    async def task_delete(task_ids: str) -> Dict[str, Any]:
-        """Delete tasks (single ID or comma-separated list) with comprehensive cleanup"""
+    async def task_delete(task_ids: str, cascade: bool = False) -> Dict[str, Any]:
+        """Delete tasks with optional cascade to children. Use cascade=True to delete subtasks too."""
         try:
             init_error = check_project_initialized(project_manager)
             if init_error:
@@ -190,23 +265,50 @@ def register_task_tools(mcp, project_manager: ProjectManager):
             data = load_json_data(tasks_file)
             tasks = data.get("tasks", [])
             
-            # Find tasks to delete
+            # Find tasks to delete (with cascade if requested)
             tasks_to_delete = []
             tasks_to_keep = []
-            deleted_ids = []
+            deleted_ids = set()
             not_found_ids = []
-            
+
+            # First pass: collect explicitly requested tasks
             for task in tasks:
                 if task.get("id") in id_list:
                     tasks_to_delete.append(task)
-                    deleted_ids.append(task["id"])
-                else:
-                    tasks_to_keep.append(task)
-            
+                    deleted_ids.add(task["id"])
+
             # Check for missing IDs
             for task_id in id_list:
                 if task_id not in deleted_ids:
                     not_found_ids.append(task_id)
+
+            # If cascade mode, recursively collect all children
+            if cascade:
+                def collect_children(parent_id):
+                    """Recursively collect all children of a task."""
+                    for task in tasks:
+                        if task.get("parent_task_id") == parent_id and task["id"] not in deleted_ids:
+                            tasks_to_delete.append(task)
+                            deleted_ids.add(task["id"])
+                            collect_children(task["id"])  # Recurse for nested children
+
+                # Collect children for all tasks to delete
+                for task_id in list(deleted_ids):
+                    collect_children(task_id)
+
+            # Check if any tasks have children (without cascade mode)
+            if not cascade:
+                for task in tasks_to_delete:
+                    children = [t for t in tasks if t.get("parent_task_id") == task["id"]]
+                    if children:
+                        return {
+                            "status": "error",
+                            "error": f"Task {task['id']} has {len(children)} children. Use cascade=True to delete children too.",
+                            "children": [{"id": c["id"], "title": c.get("title")} for c in children]
+                        }
+
+            # Separate kept vs deleted
+            tasks_to_keep = [t for t in tasks if t["id"] not in deleted_ids]
             
             if not tasks_to_delete:
                 return {
@@ -215,12 +317,13 @@ def register_task_tools(mcp, project_manager: ProjectManager):
                     "not_found": not_found_ids
                 }
             
-            # Clean up dependencies and sprint references
+            # Clean up dependencies, sprint references, and parent-child relationships
             cleanup_stats = {
                 "dependency_cleanups": 0,
-                "sprint_cleanups": 0
+                "sprint_cleanups": 0,
+                "parent_child_cleanups": 0
             }
-            
+
             # Remove dependency references
             for task in tasks_to_keep:
                 deps = task.get("dependencies", {})
@@ -228,6 +331,12 @@ def register_task_tools(mcp, project_manager: ProjectManager):
                     original_count = len(deps.get(dep_type, []))
                     deps[dep_type] = [d for d in deps.get(dep_type, []) if d not in deleted_ids]
                     cleanup_stats["dependency_cleanups"] += original_count - len(deps[dep_type])
+
+                # Remove deleted tasks from child_task_ids arrays
+                if "child_task_ids" in task:
+                    original_count = len(task["child_task_ids"])
+                    task["child_task_ids"] = [cid for cid in task["child_task_ids"] if cid not in deleted_ids]
+                    cleanup_stats["parent_child_cleanups"] += original_count - len(task["child_task_ids"])
             
             # Remove from sprints
             sprints_file = project_manager.get_data_file('sprints')
@@ -445,4 +554,105 @@ def register_task_tools(mcp, project_manager: ProjectManager):
             
         except Exception as e:
             return handle_error(e, "task_search")
-    
+
+    @require_project_basics()
+    @mcp.tool()
+    async def task_get_children(task_id: str) -> Dict[str, Any]:
+        """Get direct children (subtasks) of a task"""
+        try:
+            init_error = check_project_initialized(project_manager)
+            if init_error:
+                return init_error
+
+            tasks_file = project_manager.get_data_file('tasks')
+            data = load_json_data(tasks_file)
+
+            # Find parent task
+            parent_task = None
+            for t in data.get("tasks", []):
+                if t.get("id") == task_id:
+                    parent_task = t
+                    break
+
+            if not parent_task:
+                return {
+                    "status": "error",
+                    "error": f"Task {task_id} not found"
+                }
+
+            # Get children using parent_task_id
+            children = [t for t in data.get("tasks", []) if t.get("parent_task_id") == task_id]
+
+            return {
+                "status": "success",
+                "parent_task_id": task_id,
+                "parent_title": parent_task.get("title"),
+                "children": children,
+                "children_count": len(children)
+            }
+
+        except Exception as e:
+            return handle_error(e, "task_get_children")
+
+    @require_project_basics()
+    @mcp.tool()
+    async def task_get_subtree(task_id: str, depth: int = -1) -> Dict[str, Any]:
+        """Get task and all descendants up to specified depth (-1 = unlimited)"""
+        try:
+            init_error = check_project_initialized(project_manager)
+            if init_error:
+                return init_error
+
+            tasks_file = project_manager.get_data_file('tasks')
+            data = load_json_data(tasks_file)
+            all_tasks = data.get("tasks", [])
+
+            # Find root task
+            root_task = None
+            for t in all_tasks:
+                if t.get("id") == task_id:
+                    root_task = t
+                    break
+
+            if not root_task:
+                return {
+                    "status": "error",
+                    "error": f"Task {task_id} not found"
+                }
+
+            # Build task map for quick lookups
+            task_map = {t["id"]: t for t in all_tasks}
+
+            # Recursively collect subtree
+            def collect_subtree(tid, current_depth):
+                """Recursively collect tasks up to specified depth."""
+                if depth >= 0 and current_depth > depth:
+                    return []
+
+                task = task_map.get(tid)
+                if not task:
+                    return []
+
+                result = [task]
+
+                # Get children
+                children = [t for t in all_tasks if t.get("parent_task_id") == tid]
+                for child in children:
+                    result.extend(collect_subtree(child["id"], current_depth + 1))
+
+                return result
+
+            subtree = collect_subtree(task_id, 0)
+
+            return {
+                "status": "success",
+                "root_task_id": task_id,
+                "root_title": root_task.get("title"),
+                "subtree": subtree,
+                "total_tasks": len(subtree),
+                "depth_limit": depth if depth >= 0 else "unlimited"
+            }
+
+        except Exception as e:
+            return handle_error(e, "task_get_subtree")
+

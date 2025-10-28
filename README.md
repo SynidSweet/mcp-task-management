@@ -1,106 +1,57 @@
-# MCP Task Management Server - Dev Version
+# MCP Server - Simplified Architecture
 
-**Simplified MCP server with 35 tools across 8 categories**
+**Database Schema:** See `../SCHEMA.md` (canonical schema documentation shared with frontend)
 
-[![Tests](https://img.shields.io/badge/tests-35%2F35%20passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)]()
-[![Architecture](https://img.shields.io/badge/architecture-simplified-blue)]()
+A **simplified MCP (Model Context Protocol) server** providing 35 tools for task/sprint management. Built with a function-based architecture emphasizing directness over abstraction.
 
-## Quick Start
+**Key Stats**: 35 tools across 8 categories | 100% test coverage | ~68% less code than production version
+
+## Quick Commands
 
 ```bash
 # Run the server
-python3 server.py --project-dir "$(pwd)"
+python server.py --project-dir "$(pwd)"
 
-# Run tests
-python3 test_all_mcp_tools_direct.py
+# Run all tests (expect 35/35 passing)
+python test_all_mcp_tools_direct.py
+
+# Run database readiness check
+python test_database_readiness.py
+
+# Verify auto-sync is working
+python verify_auto_sync.py
 ```
-
-## Features
-
-- **35 MCP Tools** - Complete task/sprint management
-- **Simplified Architecture** - Function-based, no abstractions
-- **Bidirectional Sync** - Files ↔ Database automatic
-- **100% Test Coverage** - All tools tested and passing
-
-## Tools Overview
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **System** | 3 | Project setup, health check, context |
-| **Task** | 6 | Create, update, search, manage tasks |
-| **Sprint** | 5 | Sprint management and organization |
-| **Journal** | 3 | Work session tracking |
-| **Git** | 2 | Git session management |
-| **Specification** | 5 | Requirements and specifications |
-| **Template** | 6 | Task and sprint templates |
-| **Document** | 5 | Documentation management |
-
-## Architecture
-
-**Simplified Design**:
-- Function-based tool registration
-- Direct JSON file operations  
-- Unified file monitoring for sync
-- 68% less code than production version
-
-**Performance**:
-- <10ms most operations
-- <100ms database sync
-- <1s full test suite
 
 ## Documentation
 
-📖 **Complete documentation in `docs/`**:
+- **Complete Documentation:** See `CLAUDE.md` in this directory
+- **Database Schema:** See `../SCHEMA.md` (shared with frontend)
+- **Architecture Overview:** See `../DATABASE_ARCHITECTURE.md`
+- **Sync Verification:** See `SYNC_VERIFICATION_SUMMARY.md`
 
-- **[Documentation Index](docs/README.md)** - Start here
-- **[Architecture](docs/architecture/)** - System design (4 files)
-- **[Development](docs/development/)** - Developer guides (2 files)
-- **[Tools Reference](docs/tools/)** - All 35 tools (10 files)
-- **[Agent Orientation](docs/agent-orientation/)** - AI agent guides (3 files)
-- **[Testing](docs/testing/)** - Test guide (1 file)
+## What This Server Does
 
-## For AI Agents
+Provides MCP tools for:
+- Task management (create, update, search, delete)
+- Sprint planning (templates, tracking, updates)
+- Journal/session tracking
+- Specifications/requirements management
+- Document management
+- Template management
+- Git session tools
 
-See **[CLAUDE.md](CLAUDE.md)** for quick reference and **[Agent Orientation](docs/agent-orientation/)** for complete workflow guides.
+All data syncs automatically between local JSON files and Supabase database.
 
-## Development
+## For Complete Information
 
-See **[Development Guide](docs/development/README.md)** for:
-- Project structure
-- Adding new tools
-- Code patterns
+See `CLAUDE.md` for:
+- Architecture philosophy
+- Tool development patterns
+- Code structure
 - Testing approach
-
-## Testing
-
-```bash
-python3 test_all_mcp_tools_direct.py
-```
-
-Expected: 35/35 tools passing (100% coverage)
-
-See **[Testing Guide](docs/testing/README.md)** for details.
-
-## Structure
-
-```
-mcp-server-dev/
-├── README.md              # This file
-├── CLAUDE.md              # Agent reference
-├── server.py              # Main server
-├── tools/                 # 8 tool modules
-├── core/                  # Core functionality
-├── utils/                 # Utilities
-├── docs/                  # All documentation
-├── test_*.py              # Test suite
-└── supabase/              # Database
-```
-
-## License
-
-See [LICENSE](LICENSE) for details.
+- Common pitfalls
+- Design trade-offs
 
 ---
 
-**Status**: Production-ready ✅ | **Tests**: 35/35 passing ✅ | **Docs**: Complete ✅
+**Last Updated:** 2025-10-12

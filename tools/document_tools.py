@@ -85,7 +85,7 @@ def get_or_create_project_id(project_path):
         return None, f"Project error: {str(e)}"
 
 
-def register_document_tools(mcp, project_manager, server=None):
+def register_document_tools(mcp, project_manager, server=None, tool_filter=None):
     """Register document management tools with existing MCP infrastructure."""
 
     @mcp.tool()

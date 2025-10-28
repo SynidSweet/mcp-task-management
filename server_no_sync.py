@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCP Server - Simplified Architecture"""
+"""MCP Server - Simplified Architecture (No File Sync for Testing)"""
 
 import argparse
 import sys
@@ -39,7 +39,7 @@ except ImportError:
 
 
 class MCPServer:
-    """MCP Server with Simplified Architecture"""
+    """MCP Server with Simplified Architecture (No File Sync)"""
 
     def __init__(self, project_dir: Optional[Path] = None):
         self.mcp = FastMCP("claude-tasks")
@@ -62,40 +62,7 @@ class MCPServer:
                 print(f"   - {filter_desc}")
 
         self.unified_monitor = None
-        self._should_init_monitoring = self._initialized
         self._register_all_tools()
-    
-    async def _initialize_unified_monitoring(self):
-        """Initialize unified file monitoring for all auto-sync."""
-        try:
-            from core.universal_storage.unified_file_monitor import UnifiedFileMonitor
-
-            self.unified_monitor = UnifiedFileMonitor()
-            await self.unified_monitor.initialize()
-            await self.unified_monitor.register_global_resources()
-
-            if self._initialized:
-                project_id = str(self.project_manager.project_path)
-                await self.unified_monitor.register_project(
-                    project_id=project_id,
-                    project_path=self.project_manager.project_path,
-                    project_manager=self.project_manager
-                )
-
-            await self.unified_monitor.start_monitoring()
-            print("✅ Unified file monitoring initialized and started")
-
-        except Exception as e:
-            print(f"⚠️ Unified monitoring initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
-            self.unified_monitor = None
-
-    async def ensure_monitoring_initialized(self):
-        """Lazy initialization of unified monitoring when first needed."""
-        if self._should_init_monitoring and self.unified_monitor is None:
-            await self._initialize_unified_monitoring()
-            self._should_init_monitoring = False
 
     def _register_all_tools(self):
         """Register all tools using simplified function-based architecture"""
@@ -122,36 +89,26 @@ class MCPServer:
                 print(f"❌ Failed to register {module_name}: {str(e)}")
 
         print(f"🎯 Simplified Architecture Complete: {registered_count}/{len(tool_registrations)} modules loaded")
-    
+        print(f"⚠️  File monitoring disabled (watchdog not available)")
+
     def run(self):
         """Run the MCP server"""
-        # Initialize monitoring before running server
-        import asyncio
-        if self._initialized:
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._initialize_unified_monitoring())
-                loop.close()
-            except Exception as e:
-                print(f"⚠️ Could not initialize monitoring: {e}")
-
         return self.mcp.run()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MCP Server for Claude Tasks - Simplified")
+    parser = argparse.ArgumentParser(description="MCP Server for Claude Tasks - Simplified (No Sync)")
     parser.add_argument("--project-dir", type=Path, help="Project directory path")
     parser.add_argument("--validate", action="store_true", help="Validate server configuration")
-    
+
     args = parser.parse_args()
-    
+
     if args.validate:
         print("MCP Server configuration validated successfully")
         return
-    
+
     try:
-        print(f"🚀 Starting MCP Server")
+        print(f"🚀 Starting MCP Server (No File Sync Mode)")
         print(f"   Project Directory: {args.project_dir or 'Auto-detect'}")
 
         server = MCPServer(project_dir=args.project_dir)

@@ -7,7 +7,7 @@ from utils.helpers import handle_error
 from utils.validation_wrapper import require_git_tools
 
 
-def register_git_tools(mcp, project_manager: ProjectManager):
+def register_git_tools(mcp, project_manager: ProjectManager, tool_filter=None):
     """Register git tools with simple pattern"""
     
     def run_git_command(command: list, cwd: str = None) -> Dict[str, Any]:

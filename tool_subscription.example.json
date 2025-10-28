@@ -1,0 +1,22 @@
+{
+  "_comment": "Tool Subscription Configuration - Controls which MCP tools are available",
+  "_description": "Default config excludes 'document' category (online agents only). Local agents use filesystem for docs.",
+  "_categories": [
+    "system (3 tools) - Health checks, project setup",
+    "task (7 tools) - Task CRUD operations",
+    "sprint (8 tools) - Sprint management",
+    "journal (3 tools) - Session tracking",
+    "git (2 tools) - Git operations",
+    "specification (5 tools) - Requirements management",
+    "template (2 tools) - Template operations",
+    "document (5 tools) - Documentation management [EXCLUDED BY DEFAULT]"
+  ],
+  "tool_subscription": {
+    "include_tools": [],
+    "exclude_tools": [],
+    "include_categories": [],
+    "exclude_categories": [
+      "document"
+    ]
+  }
+}

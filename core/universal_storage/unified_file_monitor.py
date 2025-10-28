@@ -886,6 +886,8 @@ class UnifiedFileMonitor:
             # Database schema: only these fields are supported
             SUPPORTED_TASK_FIELDS = {
                 'id', 'title', 'description', 'status', 'priority', 'notes',
+                'parent_task_id', 'child_task_ids',
+                'sprint_id',
                 'dependencies', 'completed_at', 'created_at', 'updated_at',
                 'project_id', 'machine_id'
             }
@@ -959,6 +961,7 @@ class UnifiedFileMonitor:
             # Database schema: only these fields are supported (based on actual schema)
             SUPPORTED_SPRINT_FIELDS = {
                 'id', 'title', 'description', 'status',
+                'task_ids', 'start_date', 'end_date', 'focus',
                 'created_at', 'updated_at', 'project_id', 'machine_id'
             }
 
@@ -1225,8 +1228,7 @@ class UnifiedFileMonitor:
                 'id', 'display_id', 'specification_name', 'specification_type',
                 'description', 'parent_id', 'parent_display_id', 'approved',
                 'implemented', 'validated', 'level_depth', 'sort_order',
-                'specification_path', 'version',
-                'created_at', 'updated_at', 'project_id', 'machine_id'
+                'version', 'created_at', 'updated_at', 'project_id', 'machine_id'
             }
 
             # Sync all specifications to Supabase (upsert strategy)
@@ -1240,16 +1242,8 @@ class UnifiedFileMonitor:
                             cloud_spec['specification_name'] = v
                         elif k == 'entity_type':
                             cloud_spec['specification_type'] = v
-                        elif k == 'entity_path' and v:
-                            cloud_spec['specification_path'] = v
-                        elif k == 'specification_path' and not v:
-                            continue
                         elif k in SUPPORTED_SPEC_FIELDS:
                             cloud_spec[k] = v
-
-                    # Set default specification_path if missing
-                    if not cloud_spec.get('specification_path'):
-                        cloud_spec['specification_path'] = cloud_spec.get('display_id') or spec.get('id') or 'unknown'
 
                     cloud_spec['project_id'] = project_id
                     cloud_spec['machine_id'] = machine_id
@@ -1803,8 +1797,7 @@ class UnifiedFileMonitor:
                 'id', 'display_id', 'specification_name', 'specification_type',
                 'description', 'parent_id', 'parent_display_id', 'approved',
                 'implemented', 'validated', 'level_depth', 'sort_order',
-                'specification_path', 'version',
-                'created_at', 'updated_at', 'project_id', 'machine_id'
+                'version', 'created_at', 'updated_at', 'project_id', 'machine_id'
             }
 
             for spec_id in all_ids:
@@ -1822,19 +1815,9 @@ class UnifiedFileMonitor:
                             # Map entity_type → specification_type
                             elif k == 'entity_type':
                                 cloud_spec['specification_type'] = v
-                            # Map entity_path → specification_path (skip if null, use default later)
-                            elif k == 'entity_path' and v:
-                                cloud_spec['specification_path'] = v
-                            # Skip specification_path if it's explicitly null
-                            elif k == 'specification_path' and not v:
-                                continue
                             # Keep supported fields as-is
                             elif k in SUPPORTED_FIELDS:
                                 cloud_spec[k] = v
-
-                        # Always set specification_path (required field) - use display_id or id as fallback
-                        if not cloud_spec.get('specification_path'):
-                            cloud_spec['specification_path'] = cloud_spec.get('display_id') or spec_id or 'unknown'
 
                         cloud_spec['project_id'] = project_id
                         cloud_spec['machine_id'] = machine_id
@@ -1858,16 +1841,8 @@ class UnifiedFileMonitor:
                                     cloud_spec['specification_name'] = v
                                 elif k == 'entity_type':
                                     cloud_spec['specification_type'] = v
-                                elif k == 'entity_path' and v:
-                                    cloud_spec['specification_path'] = v
-                                elif k == 'specification_path' and not v:
-                                    continue
                                 elif k in SUPPORTED_FIELDS:
                                     cloud_spec[k] = v
-
-                            # Always set specification_path (required field)
-                            if not cloud_spec.get('specification_path'):
-                                cloud_spec['specification_path'] = cloud_spec.get('display_id') or spec_id or 'unknown'
 
                             cloud_spec['project_id'] = project_id
                             cloud_spec['machine_id'] = machine_id

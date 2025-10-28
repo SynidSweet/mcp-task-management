@@ -178,37 +178,41 @@ def format_specifications_by_verbosity(specifications: List[Dict[str, Any]], ver
         verbosity: Output detail level (ultra_minimal, minimal, compact, full)
 
     Returns:
-        Formatted specifications list
+        Formatted specifications list with display_id prioritized over UUID
     """
     if verbosity == SpecificationConstants.VERBOSITY_ULTRA_MINIMAL:
         return [
-            f"{spec.get('specification_path', 'NO_PATH')}|{spec.get('specification_type', 'NO_TYPE')}|{spec.get('specification_name', 'NO_NAME')}"
+            f"{spec.get('display_id', 'NO_ID')}|{spec.get('specification_type', 'NO_TYPE')}|{spec.get('specification_name', 'NO_NAME')}"
             for spec in specifications
         ]
     elif verbosity == SpecificationConstants.VERBOSITY_MINIMAL:
         return [
             {
-                "id": spec["id"],
-                "specification_path": spec.get("specification_path"),
+                "display_id": spec.get("display_id"),
                 "specification_name": spec["specification_name"],
                 "specification_type": spec["specification_type"],
-                "parent_id": spec.get("parent_id")
+                "parent_display_id": spec.get("parent_display_id"),
+                "validation_status": spec.get("validation_status", "unknown")
             }
             for spec in specifications
         ]
     elif verbosity == SpecificationConstants.VERBOSITY_COMPACT:
-        return [
-            {
-                "id": spec["id"],
-                "specification_path": spec.get("specification_path"),
+        result = []
+        for spec in specifications:
+            entry = {
+                "display_id": spec.get("display_id"),
                 "specification_name": spec["specification_name"],
                 "specification_type": spec["specification_type"],
-                "parent_id": spec.get("parent_id"),
+                "parent_display_id": spec.get("parent_display_id"),
                 "description": spec.get("description", ""),
-                "approved": spec.get("approved", False)
+                "approved": spec.get("approved", False),
+                "validation_status": spec.get("validation_status", "unknown")
             }
-            for spec in specifications
-        ]
+            # Add validation hint if present
+            if "validation_hint" in spec:
+                entry["validation_hint"] = spec["validation_hint"]
+            result.append(entry)
+        return result
     else:  # full
         return specifications
 
@@ -258,16 +262,23 @@ class SpecificationQueryBuilder:
             self.query = self.query.eq('display_id', display_id)
         return self
 
-    def filter_by_path(self, specification_path: str):
-        """Filter by specification_path."""
-        if self.query and specification_path:
-            self.query = self.query.eq('specification_path', specification_path)
-        return self
-
     def filter_by_ids(self, entity_ids: List[str]):
-        """Filter by multiple IDs using IN clause."""
+        """Filter by multiple IDs using IN clause. Supports mixed UUID/display_id lists."""
         if self.query and entity_ids:
-            self.query = self.query.in_('id', entity_ids)
+            # Separate UUIDs from display_ids
+            uuids = [id for id in entity_ids if is_uuid_format(id)]
+            display_ids = [id for id in entity_ids if not is_uuid_format(id)]
+
+            # Build OR condition for both types
+            if uuids and display_ids:
+                # Mixed list - need OR condition
+                self.query = self.query.or_(f"id.in.({','.join(uuids)}),display_id.in.({','.join(display_ids)})")
+            elif uuids:
+                # Only UUIDs
+                self.query = self.query.in_('id', uuids)
+            elif display_ids:
+                # Only display_ids
+                self.query = self.query.in_('display_id', display_ids)
         return self
 
     def execute(self):
@@ -283,8 +294,7 @@ def build_specification_record(
     specification_type: str,
     display_id: str,
     parent_display_id: str,
-    description: str,
-    specification_path: str
+    description: str
 ) -> Dict[str, Any]:
     """Build specification record dictionary for database insertion."""
     return {
@@ -295,7 +305,6 @@ def build_specification_record(
         'specification_type': specification_type,
         'display_id': display_id,
         'parent_display_id': parent_display_id,
-        'specification_path': specification_path,
         'description': description or '',
         'approved': False,
         'implemented': False,
@@ -384,6 +393,47 @@ def load_local_specifications_fallback(
     except Exception as e:
         raise Exception(f"Local fallback failed: {e}")
 
+
+def is_uuid_format(identifier: str) -> bool:
+    """Check if string is UUID format (8-4-4-4-12 hex pattern)."""
+    if not identifier:
+        return False
+    uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    return bool(re.match(uuid_pattern, identifier, re.IGNORECASE))
+
+def resolve_specification_id(identifier: str, project_id: str, machine_id: str) -> tuple[str, str]:
+    """Resolve identifier to UUID and display_id.
+
+    Args:
+        identifier: Either UUID or display_id
+        project_id: Project scope
+        machine_id: Machine scope
+
+    Returns:
+        (uuid, error) - UUID if found, error message if not
+    """
+    if not identifier:
+        return None, "Identifier is required"
+
+    try:
+        client, error = get_supabase_client()
+        if error:
+            return None, f"Database connection error: {error}"
+
+        # If it's a UUID, query by id
+        if is_uuid_format(identifier):
+            result = client.table('specifications').select('id').eq('id', identifier).eq('project_id', project_id).eq('machine_id', machine_id).execute()
+        else:
+            # Otherwise treat as display_id
+            result = client.table('specifications').select('id').eq('display_id', identifier).eq('project_id', project_id).eq('machine_id', machine_id).execute()
+
+        if not result.data or len(result.data) == 0:
+            return None, f"Specification '{identifier}' not found"
+
+        return result.data[0]['id'], None
+
+    except Exception as e:
+        return None, f"Lookup error: {str(e)}"
 
 def validate_display_id_format(display_id: str) -> tuple[bool, str]:
     """Validate display ID format requirements."""
@@ -576,49 +626,6 @@ def get_or_create_project_id(project_path):
     except Exception as e:
         return None, f"Project error: {str(e)}"
 
-def calculate_specification_path_from_parent_id(parent_id, specification_name, project_id, machine_id):
-    """Calculate specification path by traversing parent hierarchy - specification_path is now a derived value."""
-    if not parent_id:
-        return specification_name
-
-    try:
-        client, error = get_supabase_client()
-        if error:
-            return specification_name  # Fallback to name if database unavailable
-
-        # Get all specifications to build hierarchy map
-        result = client.table('specifications').select('id, specification_name, parent_id').eq('project_id', project_id).eq('machine_id', machine_id).execute()
-
-        if not hasattr(result, 'data') or not result.data:
-            return specification_name
-
-        # Build parent map: specification_id -> parent_specification
-        parent_map = {}
-        for specification in result.data:
-            parent_map[specification['id']] = {
-                'specification_name': specification['specification_name'],
-                'parent_id': specification['parent_id']
-            }
-
-        # Traverse up the hierarchy to build path
-        path_parts = [specification_name]
-        current_parent_id = parent_id
-        max_depth = 10  # Prevent infinite loops
-        depth = 0
-
-        while current_parent_id and depth < max_depth:
-            if current_parent_id not in parent_map:
-                break
-
-            parent_specification = parent_map[current_parent_id]
-            path_parts.insert(0, parent_specification['specification_name'])
-            current_parent_id = parent_specification['parent_id']
-            depth += 1
-
-        return '.'.join(path_parts)
-    except Exception as e:
-        return specification_name  # Fallback to name if calculation fails
-
 def validate_parent_exists(parent_id, project_id, machine_id):
     """Validate that parent specification exists in the database."""
     if not parent_id:
@@ -700,7 +707,128 @@ def detect_circular_reference(specification_id, new_parent_id, project_id, machi
     # Convert empty string to None for backward compatibility
     return is_circular, error if error else None, path
 
-def register_specification_tools(mcp, project_manager):
+
+# ============================================================================
+# VALIDATION STATUS HELPERS
+# ============================================================================
+
+def calculate_validation_status(current_spec: Dict, validated_spec: Dict) -> str:
+    """Calculate validation status for a specification.
+
+    Compares current (AI suggested) vs validated (human approved) versions.
+
+    Args:
+        current_spec: Current specification record
+        validated_spec: Validated specification record (or None)
+
+    Returns:
+        "new" - No validated record exists (never approved)
+        "validated" - Validated record exists and matches current
+        "modified" - Validated record exists but current has changes
+    """
+    if not validated_spec:
+        return "new"
+
+    # Compare key fields that AI agents can modify
+    key_fields = [
+        'specification_name',
+        'description',
+        'specification_type',
+        'display_id',
+        'parent_display_id'
+    ]
+
+    for field in key_fields:
+        current_val = current_spec.get(field)
+        validated_val = validated_spec.get(field)
+        if current_val != validated_val:
+            return "modified"
+
+    return "validated"
+
+
+def fetch_validated_specifications(
+    client,
+    project_id: str,
+    machine_id: str,
+    specification_ids: List[str] = None
+) -> Dict[str, Dict]:
+    """Fetch validated specifications and build lookup map.
+
+    Args:
+        client: Supabase client
+        project_id: Project scope
+        machine_id: Machine scope
+        specification_ids: Optional list of specific IDs to fetch
+
+    Returns:
+        Dictionary mapping specification UUID -> validated record
+    """
+    try:
+        query = (client.table('specifications_validated')
+            .select('*')
+            .eq('project_id', project_id)
+            .eq('machine_id', machine_id))
+
+        if specification_ids:
+            query = query.in_('id', specification_ids)
+
+        result = query.execute()
+
+        if hasattr(result, 'data') and result.data:
+            return {v['id']: v for v in result.data}
+
+        return {}
+    except Exception as e:
+        # Silently fail - validation status is optional enhancement
+        print(f"Warning: Could not fetch validated specifications: {e}")
+        return {}
+
+
+def enhance_with_validation_status(
+    specifications: List[Dict],
+    validated_map: Dict[str, Dict],
+    verbosity: str = "minimal"
+) -> List[Dict]:
+    """Add validation status to specification records.
+
+    Modifies specifications in-place to add validation metadata.
+
+    Args:
+        specifications: List of current specifications
+        validated_map: Map of UUID -> validated specification
+        verbosity: Output detail level
+
+    Returns:
+        Enhanced specifications list
+    """
+    for spec in specifications:
+        spec_id = spec.get('id')
+        validated_spec = validated_map.get(spec_id)
+
+        # Calculate status
+        status = calculate_validation_status(spec, validated_spec)
+        spec['validation_status'] = status
+
+        # Add hint for modified specs (compact mode and above)
+        if verbosity in ['compact', 'full'] and status == 'modified':
+            spec['validation_hint'] = 'Has unvalidated changes'
+
+        # Add validated snapshot for full mode
+        if verbosity == 'full' and validated_spec:
+            spec['validated_snapshot'] = {
+                'specification_name': validated_spec.get('specification_name'),
+                'description': validated_spec.get('description'),
+                'display_id': validated_spec.get('display_id'),
+                'parent_display_id': validated_spec.get('parent_display_id'),
+                'validated_at': validated_spec.get('validated_at'),
+                'validated_by': validated_spec.get('validated_by')
+            }
+
+    return specifications
+
+
+def register_specification_tools(mcp, project_manager, tool_filter=None):
     """Register parent_id-based specifications system tools with MCP infrastructure."""
 
     @mcp.tool()
@@ -713,7 +841,12 @@ def register_specification_tools(mcp, project_manager):
         requirements: List[str] = None,
         constraints: List[str] = None
     ) -> Dict[str, Any]:
-        """Create a specification using display ID-based hierarchy.
+        """SUGGEST a new specification for user validation.
+
+        ⚠️ IMPORTANT: All specifications created by AI agents are SUGGESTIONS that
+        require human validation before implementation. The specification will be
+        marked as unapproved and validation_status="new" until validated by a user
+        in the frontend.
 
         Args:
             specification_name: Human-readable name for the specification
@@ -725,7 +858,7 @@ def register_specification_tools(mcp, project_manager):
             constraints: List of constraints for the specification
 
         Returns:
-            Dict with status and created specification information
+            Dict with status and suggested specification information
         """
         if not project_manager.is_initialized():
             return build_error_response(ValidationError("No project directory set"))
@@ -753,7 +886,8 @@ def register_specification_tools(mcp, project_manager):
             if not unique_valid:
                 return build_error_response(ValidationError(f"Display ID validation failed: {unique_error}"))
 
-            # Validate parent display ID exists if provided
+            # Validate parent display ID exists and resolve to UUID if provided
+            parent_uuid = None
             if parent_display_id:
                 parent_valid, parent_error = validate_parent_display_id_exists(parent_display_id, project_id, machine_id)
                 if not parent_valid:
@@ -766,6 +900,11 @@ def register_specification_tools(mcp, project_manager):
                         CircularReferenceError(f"Circular reference prevented: {circular_error}", cycle_path)
                     )
 
+                # Look up parent UUID for database FK relationship
+                parent_uuid, lookup_error = resolve_specification_id(parent_display_id, project_id, machine_id)
+                if lookup_error:
+                    return build_error_response(DatabaseError(f"Parent UUID lookup failed: {lookup_error}"))
+
             # Generate UUID for database storage (internal)
             actual_specification_id = str(uuid.uuid4())
 
@@ -775,14 +914,14 @@ def register_specification_tools(mcp, project_manager):
                 return build_error_response(DatabaseError(f"Database connection failed: {client_error}"))
 
             try:
-                # Calculate specification_path from display_id hierarchy
-                specification_path = f"{parent_display_id}/{display_id}" if parent_display_id else display_id
-
                 # Build specification record
                 specification_record = build_specification_record(
                     actual_specification_id, project_id, machine_id, specification_name,
-                    specification_type, display_id, parent_display_id, description, specification_path
+                    specification_type, display_id, parent_display_id, description
                 )
+
+                # Set parent_id UUID for database foreign key integrity
+                specification_record['parent_id'] = parent_uuid
 
                 # Insert specification into database
                 result = client.table('specifications').insert(specification_record).execute()
@@ -813,9 +952,10 @@ def register_specification_tools(mcp, project_manager):
                     "machine_id": machine_id,
                     "requirements_added": requirements_added,
                     "constraints_added": constraints_added,
-                    "message": f"Specification '{specification_name}' created with display ID '{display_id}'",
-                    "database_synced": True,
-                    "hierarchy_note": "Uses display ID-based hierarchy (no stored specification_path)"
+                    "message": f"Specification '{specification_name}' suggested (pending user validation)",
+                    "reminder": "⚠️ This is a suggestion. A user must validate in the frontend before implementation.",
+                    "validation_status": "new",
+                    "database_synced": True
                 }
                         
             except Exception as db_error:
@@ -834,7 +974,14 @@ def register_specification_tools(mcp, project_manager):
         constraints: List[str] = None,
         parent_display_id: str = None
     ) -> Dict[str, Any]:
-        """Update an existing specification using specification ID. Uses display ID-based hierarchy."""
+        """SUGGEST updates to an existing specification for user validation.
+
+        ⚠️ IMPORTANT: All updates made by AI agents are SUGGESTIONS that require
+        human validation. The specification will be marked validation_status="modified"
+        if it was previously validated, indicating it has unvalidated changes.
+
+        Accepts UUID or display_id for specification_id parameter.
+        """
         if not project_manager.is_initialized():
             return build_error_response(ValidationError("No project directory set"))
 
@@ -846,43 +993,46 @@ def register_specification_tools(mcp, project_manager):
 
             machine_id = get_machine_id()
 
-            # Validate parent exists if provided
+            # Resolve specification_id to UUID (accepts both UUID and display_id)
+            resolved_uuid, resolve_error = resolve_specification_id(specification_id, project_id, machine_id)
+            if resolve_error:
+                return build_error_response(NotFoundError(f"Specification '{specification_id}' not found: {resolve_error}"))
+
+            # Look up parent UUID if parent_display_id is being changed
+            parent_uuid = None
             if parent_display_id is not None:  # Allow empty string to clear parent
                 if parent_display_id and parent_display_id != "":
                     valid_parent, parent_error = validate_parent_display_id_exists(parent_display_id, project_id, machine_id)
                     if not valid_parent:
                         return build_error_response(ValidationError(f"Parent validation failed: {parent_error}"))
 
-                # Check for circular references
-                is_circular, circular_error, cycle_path = check_display_id_circular_reference(display_id or "", parent_display_id, project_id, machine_id)
-                if is_circular:
-                    return build_error_response(
-                        CircularReferenceError(f"Circular reference prevented: {circular_error}", cycle_path)
-                    )
+                    # Check for circular references
+                    is_circular, circular_error, cycle_path = check_display_id_circular_reference(display_id or "", parent_display_id, project_id, machine_id)
+                    if is_circular:
+                        return build_error_response(
+                            CircularReferenceError(f"Circular reference prevented: {circular_error}", cycle_path)
+                        )
+
+                    # Resolve parent display_id to UUID
+                    parent_uuid, lookup_error = resolve_specification_id(parent_display_id, project_id, machine_id)
+                    if lookup_error:
+                        return build_error_response(DatabaseError(f"Parent UUID lookup failed: {lookup_error}"))
+                # else: parent_display_id is empty string, will set parent_uuid to None below
 
             client, error = get_supabase_client()
             if error:
                 return build_error_response(DatabaseError(f"Database connection failed: {error}"))
 
-            # Get current specification to get specification_name for path calculation
-            current_result = client.table('specifications').select('*').eq('id', specification_id).eq('project_id', project_id).eq('machine_id', machine_id).execute()
+            # Get current specification for path calculation (use resolved UUID)
+            current_result = client.table('specifications').select('*').eq('id', resolved_uuid).eq('project_id', project_id).eq('machine_id', machine_id).execute()
 
             if not hasattr(current_result, 'data') or not current_result.data:
                 return build_error_response(NotFoundError(f"Specification {specification_id} not found"))
 
             current_specification = current_result.data[0]
 
-            # Use provided specification_name or keep current one
-            final_specification_name = specification_name if specification_name is not None else current_specification['specification_name']
-            final_parent_display_id = parent_display_id if parent_display_id is not None else current_specification.get('parent_display_id')
-
-            # Calculate specification path from display_id hierarchy
-            calculated_specification_path = f"{final_parent_display_id}/{display_id or current_specification['display_id']}" if final_parent_display_id else (display_id or current_specification['display_id'])
-
             # Build update data - only include fields that are provided
             update_data = {
-                'specification_path': calculated_specification_path,  # Always recalculate
-                'specification_name': final_specification_name,
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }
 
@@ -898,18 +1048,19 @@ def register_specification_tools(mcp, project_manager):
                 update_data['constraints'] = constraints
             if parent_display_id is not None:
                 update_data['parent_display_id'] = parent_display_id if parent_display_id != "" else None
+                # Also update parent_id UUID for database FK integrity
+                update_data['parent_id'] = parent_uuid
 
-            # Update in database
-            result = client.table('specifications').update(update_data).eq('id', specification_id).eq('project_id', project_id).eq('machine_id', machine_id).execute()
+            # Update in database (use resolved UUID)
+            result = client.table('specifications').update(update_data).eq('id', resolved_uuid).eq('project_id', project_id).eq('machine_id', machine_id).execute()
 
             if hasattr(result, 'data') and result.data:
                 return {
                     "status": "success",
                     "specification_id": specification_id,
-                    "specification_path": calculated_specification_path,  # Recalculated value
                     "updated_fields": list(update_data.keys()),
-                    "message": f"Specification updated with display ID hierarchy",
-                    "hierarchy_note": "specification_path recalculated from display ID relationships"
+                    "message": f"Specification updates suggested (pending user validation)",
+                    "reminder": "⚠️ Changes are suggestions. User must re-validate in the frontend."
                 }
             else:
                 return build_error_response(DatabaseError("Update failed - no rows affected"))
@@ -922,7 +1073,14 @@ def register_specification_tools(mcp, project_manager):
         specification_id: str,
         cascade: bool = False
     ) -> Dict[str, Any]:
-        """Delete specification by ID with optional cascade to children"""
+        """SUGGEST deletion of a specification for user validation.
+
+        ⚠️ IMPORTANT: Deletion requests from AI agents are SUGGESTIONS. A user
+        must approve the deletion in the frontend. Consider whether this specification
+        has been validated and is actively used before suggesting deletion.
+
+        Accepts UUID or display_id for specification_id parameter.
+        """
         if not project_manager.is_initialized():
             return build_error_response(ValidationError("No project directory set"))
 
@@ -933,18 +1091,24 @@ def register_specification_tools(mcp, project_manager):
                 return build_error_response(DatabaseError(f"Project setup failed: {project_error}"))
 
             machine_id = get_machine_id()
+
+            # Resolve specification_id to UUID (accepts both UUID and display_id)
+            resolved_uuid, resolve_error = resolve_specification_id(specification_id, project_id, machine_id)
+            if resolve_error:
+                return build_error_response(NotFoundError(f"Specification '{specification_id}' not found: {resolve_error}"))
+
             client, error = get_supabase_client()
             if error:
                 return build_error_response(DatabaseError(f"Database connection failed: {error}"))
 
             if cascade:
-                # Get all descendants first
+                # Get all descendants first (use resolved UUID)
                 all_specifications_result = client.table('specifications').select('id, parent_id, specification_name').eq('project_id', project_id).eq('machine_id', machine_id).execute()
 
                 if hasattr(all_specifications_result, 'data') and all_specifications_result.data:
                     # Build hierarchy to find all descendants
                     specification_map = {s['id']: s for s in all_specifications_result.data}
-                    to_delete = [specification_id]
+                    to_delete = [resolved_uuid]
 
                     # Recursively find children
                     def find_children(parent_id):
@@ -953,7 +1117,7 @@ def register_specification_tools(mcp, project_manager):
                             to_delete.append(child_id)
                             find_children(child_id)  # Recurse
 
-                    find_children(specification_id)
+                    find_children(resolved_uuid)
 
                     # Delete all specifications in the hierarchy
                     delete_result = client.table('specifications').delete().in_('id', to_delete).eq('project_id', project_id).eq('machine_id', machine_id).execute()
@@ -963,13 +1127,14 @@ def register_specification_tools(mcp, project_manager):
                         "deleted_specification_ids": to_delete,
                         "deleted_count": len(to_delete),
                         "cascade": True,
-                        "message": f"Deleted specification and {len(to_delete)-1} descendants"
+                        "message": f"Deletion of specification and {len(to_delete)-1} descendants suggested",
+                        "reminder": "⚠️ Deletion is a suggestion. User must approve in the frontend."
                     }
                 else:
                     return build_error_response(DatabaseError("Could not fetch specifications for cascade delete"))
             else:
-                # Check if specification has children
-                children_result = client.table('specifications').select('id').eq('parent_id', specification_id).eq('project_id', project_id).eq('machine_id', machine_id).execute()
+                # Check if specification has children (use resolved UUID)
+                children_result = client.table('specifications').select('id').eq('parent_id', resolved_uuid).eq('project_id', project_id).eq('machine_id', machine_id).execute()
 
                 if hasattr(children_result, 'data') and children_result.data:
                     return {
@@ -977,14 +1142,15 @@ def register_specification_tools(mcp, project_manager):
                         "error": f"Cannot delete specification with {len(children_result.data)} children. Use cascade=true to delete children as well."
                     }
 
-                # Delete single specification
-                result = client.table('specifications').delete().eq('id', specification_id).eq('project_id', project_id).eq('machine_id', machine_id).execute()
+                # Delete single specification (use resolved UUID)
+                result = client.table('specifications').delete().eq('id', resolved_uuid).eq('project_id', project_id).eq('machine_id', machine_id).execute()
 
                 return {
                     "status": "success",
                     "deleted_specification_id": specification_id,
                     "cascade": False,
-                    "message": "Specification deleted successfully"
+                    "message": "Specification deletion suggested (pending user approval)",
+                    "reminder": "⚠️ Deletion is a suggestion. User must approve in the frontend."
                 }
 
         except Exception as e:
@@ -1008,7 +1174,7 @@ def register_specification_tools(mcp, project_manager):
 
         Args:
             scope: Query mode - "all" (project-wide), "root" (no parent), "children" (direct children), "subtree" (full branch)
-            parent_id: Parent UUID or display_id for "children" or "subtree" scope
+            parent_id: Parent display_id (or UUID) for "children" or "subtree" scope
             depth: Hierarchy depth (-1=unlimited, 0=current level, N=N+1 levels)
             entity_type: Filter by type (api, module, component, etc.)
             include_unapproved: Include unapproved entities (default: False)
@@ -1071,6 +1237,13 @@ def register_specification_tools(mcp, project_manager):
 
             machine_id = get_machine_id()
 
+            # Resolve parent_id to UUID if provided (accepts display_id or UUID)
+            resolved_parent_uuid = None
+            if parent_id and scope in [SpecificationConstants.SCOPE_CHILDREN, SpecificationConstants.SCOPE_SUBTREE]:
+                resolved_parent_uuid, resolve_error = resolve_specification_id(parent_id, project_id, machine_id)
+                if resolve_error:
+                    return build_error_response(NotFoundError(f"Parent specification '{parent_id}' not found: {resolve_error}"))
+
             # Try Supabase with timeout protection, add local fallback
             specifications = []
             storage_type = "unknown"
@@ -1084,9 +1257,9 @@ def register_specification_tools(mcp, project_manager):
                 builder = SpecificationQueryBuilder(client, project_id, machine_id)
                 builder.base_query()
 
-                # Apply scope-specific filters
+                # Apply scope-specific filters (use resolved UUID)
                 if scope == SpecificationConstants.SCOPE_CHILDREN:
-                    builder.filter_by_parent(parent_id)
+                    builder.filter_by_parent(resolved_parent_uuid)
 
                 # Apply approval filter
                 builder.filter_by_approval(include_unapproved, approved)
@@ -1127,8 +1300,8 @@ def register_specification_tools(mcp, project_manager):
                 specifications = [s for s in specifications if not s.get('parent_id')]
 
             elif scope == SpecificationConstants.SCOPE_SUBTREE:
-                # Get subtree from parent_id
-                specifications = filter_specifications_by_depth(specifications, depth, parent_id)
+                # Get subtree from parent_id (use resolved UUID)
+                specifications = filter_specifications_by_depth(specifications, depth, resolved_parent_uuid)
 
             elif scope == SpecificationConstants.SCOPE_ALL:
                 # Filter by depth from roots
@@ -1136,6 +1309,20 @@ def register_specification_tools(mcp, project_manager):
                     specifications = filter_specifications_by_depth(specifications, depth, None)
 
             # scope == "children" already filtered by query above
+
+            # Enhance with validation status (fetch validated versions)
+            if specifications and storage_type == "supabase_primary":
+                try:
+                    spec_ids = [s['id'] for s in specifications]
+                    validated_map = fetch_validated_specifications(
+                        client, project_id, machine_id, spec_ids
+                    )
+                    specifications = enhance_with_validation_status(
+                        specifications, validated_map, verbosity
+                    )
+                except Exception as e:
+                    # Silently continue without validation status on error
+                    print(f"Warning: Could not enhance with validation status: {e}")
 
             # Format based on verbosity
             formatted_specifications = format_specifications_by_verbosity(specifications, verbosity)
@@ -1159,19 +1346,17 @@ def register_specification_tools(mcp, project_manager):
         specification_ids: List[str] = None,
         specification_id: str = None,
         display_id: str = None,
-        specification_path: str = None,
         search_query: str = None,
         specification_type: str = None,
         verbosity: str = "compact",
         limit: int = 50
     ) -> Dict[str, Any]:
-        """Retrieve specific specifications by ID, path, or search.
+        """Retrieve specific specifications by ID or search.
 
         Args:
             specification_ids: Batch fetch multiple specifications by UUID/display_id list
             specification_id: Single specification by UUID
             display_id: Single specification by display_id
-            specification_path: Single specification by hierarchical path
             search_query: Text search in name/description
             specification_type: Filter by type (when searching)
             verbosity: Output detail level ("minimal", "compact", "full")
@@ -1181,7 +1366,6 @@ def register_specification_tools(mcp, project_manager):
             - specification_ids: Batch fetch multiple specifications
             - specification_id: Get one specification by UUID
             - display_id: Get one specification by display_id
-            - specification_path: Get one specification by path
             - search_query: Find specifications by text match
 
         Examples:
@@ -1202,18 +1386,17 @@ def register_specification_tools(mcp, project_manager):
             specification_ids is not None,
             specification_id is not None,
             display_id is not None,
-            specification_path is not None,
             search_query is not None
         ])
 
         if modes_specified == 0:
             return build_error_response(
-                ValidationError("Must specify one of: specification_ids, specification_id, display_id, specification_path, search_query")
+                ValidationError("Must specify one of: specification_ids, specification_id, display_id, search_query")
             )
 
         if modes_specified > 1:
             return build_error_response(
-                ValidationError("Specify only one of: specification_ids, specification_id, display_id, specification_path, search_query")
+                ValidationError("Specify only one of: specification_ids, specification_id, display_id, search_query")
             )
 
         try:
@@ -1258,13 +1441,6 @@ def register_specification_tools(mcp, project_manager):
                 if hasattr(result, 'data') and result.data:
                     specifications = result.data
 
-            elif specification_path:
-                # Single specification by path
-                result = builder.base_query().filter_by_path(specification_path).execute()
-
-                if hasattr(result, 'data') and result.data:
-                    specifications = result.data
-
             elif search_query:
                 # Text search in name and description
                 result = builder.base_query().execute()
@@ -1289,6 +1465,20 @@ def register_specification_tools(mcp, project_manager):
 
                     # Apply limit
                     specifications = specifications[:limit]
+
+            # Enhance with validation status (fetch validated versions)
+            if specifications:
+                try:
+                    spec_ids = [s['id'] for s in specifications]
+                    validated_map = fetch_validated_specifications(
+                        client, project_id, machine_id, spec_ids
+                    )
+                    specifications = enhance_with_validation_status(
+                        specifications, validated_map, verbosity
+                    )
+                except Exception as e:
+                    # Silently continue without validation status on error
+                    print(f"Warning: Could not enhance with validation status: {e}")
 
             # Format based on verbosity
             formatted_specifications = format_specifications_by_verbosity(specifications, verbosity)

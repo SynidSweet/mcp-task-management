@@ -35,10 +35,10 @@ Valid types: `module`, `feature`, `service`, `api`, `contract`, `component`, `sc
 ```python
 {
     "status": "success",
-    "entity_id": "uuid-here",
+    "specification_id": "uuid-here",
     "display_id": "user_auth",
-    "specification_path": "auth_module.user_auth",
-    "message": "Entity created successfully"
+    "parent_display_id": "auth_module",
+    "message": "Specification 'User Authentication' created with display ID 'user_auth'"
 }
 ```
 
@@ -104,17 +104,14 @@ mcp__claude-tasks__specification_create_entity
 ```python
 {
     "status": "success",
-    "entities": [
+    "specifications": [
         {
-            "id": "uuid",
             "display_id": "user_module",
             "specification_name": "User Module",
             "specification_type": "module",
-            "specification_path": "user_module",
-            "parent_id": null,
-            "level_depth": 0,
-            "requirements": ["..."],
-            "constraints": ["..."]
+            "parent_display_id": null,
+            "description": "User management functionality",
+            "approved": false
         }
     ],
     "total_count": 15

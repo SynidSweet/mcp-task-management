@@ -15,38 +15,39 @@ from utils.helpers import (
 from utils.validation_wrapper import require_project_basics
 
 
-def register_sprint_tools(mcp, project_manager: ProjectManager):
+def register_sprint_tools(mcp, project_manager: ProjectManager, tool_filter=None):
     """Register sprint tools with simple pattern"""
-    
-    @require_project_basics()
-    @mcp.tool()
-    async def sprint_get_current() -> Dict[str, Any]:
-        """Get current active sprint with enhanced strategic context"""
-        try:
-            
-            sprints_file = project_manager.get_data_file('sprints')
-            data = load_json_data(sprints_file)
-            
-            # Find active sprint
-            active_sprint = None
-            for sprint in data.get("sprints", []):
-                if sprint.get("status") == "active":
-                    active_sprint = sprint
-                    break
-            
-            if not active_sprint:
+
+    if not tool_filter or tool_filter.should_register_tool("sprint_get_current"):
+        @require_project_basics()
+        @mcp.tool()
+        async def sprint_get_current() -> Dict[str, Any]:
+            """Get current active sprint with enhanced strategic context"""
+            try:
+
+                sprints_file = project_manager.get_data_file('sprints')
+                data = load_json_data(sprints_file)
+
+                # Find active sprint
+                active_sprint = None
+                for sprint in data.get("sprints", []):
+                    if sprint.get("status") == "active":
+                        active_sprint = sprint
+                        break
+
+                if not active_sprint:
+                    return {
+                        "status": "error",
+                        "error": "No active sprint found"
+                    }
+
                 return {
-                    "status": "error",
-                    "error": "No active sprint found"
+                    "status": "success",
+                    "current_sprint": active_sprint
                 }
-            
-            return {
-                "status": "success",
-                "current_sprint": active_sprint
-            }
-            
-        except Exception as e:
-            return handle_error(e, "sprint_get_current")
+
+            except Exception as e:
+                return handle_error(e, "sprint_get_current")
     
     @require_project_basics()
     @mcp.tool()
