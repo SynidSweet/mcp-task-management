@@ -50,7 +50,7 @@ Located in `~/.claude/`:
 - **commands/*.md** → `commands` table
 - **agents/*.md** → `agents` table
 - **docs/**/*.md** → `documentation` table (recursive)
-- **.claude-mcp-config.json** → `mcp_configs` table
+- **.claude-mcp-config.json** or **.mcp.json** → `mcp_config_files` + `mcp_servers` tables (normalized)
 
 ## How It Works
 

@@ -28,7 +28,7 @@ def register_system_tools(mcp, project_manager: ProjectManager, tool_filter=None
 
                 # Simple file existence check
                 data_files = {}
-                for data_type in ["tasks", "sprints", "backlog", "journal"]:
+                for data_type in ["tasks", "sprints", "journal"]:
                     try:
                         file_path = project_manager.get_data_file(data_type)
                         data_files[data_type] = {

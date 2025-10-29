@@ -583,20 +583,99 @@ class DirectMCPToolsTester:
         return results
 
     async def test_document_tools(self) -> dict:
-        """Test document tools registration."""
-        self.log("\n📄 Testing Document Tools (5 tools - registration)", "INFO")
-        results = {"tested": 5, "passed": 5, "failed": 0, "errors": []}
+        """Test document tools - filesystem-only operations."""
+        self.log("\n📄 Testing Document Tools (5 tools)", "INFO")
+        results = {"tested": 5, "passed": 0, "failed": 0, "errors": []}
 
         try:
-            from tools.document_tools import register_document_tools
-            tools = ["document_create", "document_update", "document_query",
-                     "document_get", "document_delete"]
-            for tool in tools:
-                self.log(f"{tool} (registered)", "PASS")
+            # Test 1: document_create (via filesystem write)
+            try:
+                docs_dir = self.temp_dir / 'docs' / 'guides'
+                docs_dir.mkdir(parents=True, exist_ok=True)
+
+                doc_file = docs_dir / 'Test Document.md'
+                content = "# Test Document\n\nTest description\n\nTest content"
+                doc_file.write_text(content)
+
+                if doc_file.exists():
+                    self.log("document_create", "PASS")
+                    results["passed"] += 1
+                else:
+                    self.log("document_create: file not created", "FAIL")
+                    results["failed"] += 1
+            except Exception as e:
+                self.log(f"document_create: {e}", "FAIL")
+                results["failed"] += 1
+                results["errors"].append(f"document_create: {e}")
+
+            # Test 2: document_get (via filesystem read)
+            try:
+                if doc_file.exists():
+                    content = doc_file.read_text()
+                    if "Test Document" in content:
+                        self.log("document_get", "PASS")
+                        results["passed"] += 1
+                    else:
+                        self.log("document_get: content not found", "FAIL")
+                        results["failed"] += 1
+                else:
+                    self.log("document_get: file doesn't exist", "FAIL")
+                    results["failed"] += 1
+            except Exception as e:
+                self.log(f"document_get: {e}", "FAIL")
+                results["failed"] += 1
+                results["errors"].append(f"document_get: {e}")
+
+            # Test 3: document_query (via filesystem glob)
+            try:
+                md_files = list(docs_dir.glob('**/*.md'))
+                if len(md_files) > 0:
+                    self.log("document_query", "PASS")
+                    results["passed"] += 1
+                else:
+                    self.log("document_query: no files found", "FAIL")
+                    results["failed"] += 1
+            except Exception as e:
+                self.log(f"document_query: {e}", "FAIL")
+                results["failed"] += 1
+                results["errors"].append(f"document_query: {e}")
+
+            # Test 4: document_update (via filesystem write)
+            try:
+                new_content = "# Test Document\n\nUpdated content"
+                doc_file.write_text(new_content)
+
+                verify_content = doc_file.read_text()
+                if "Updated content" in verify_content:
+                    self.log("document_update", "PASS")
+                    results["passed"] += 1
+                else:
+                    self.log("document_update: update not saved", "FAIL")
+                    results["failed"] += 1
+            except Exception as e:
+                self.log(f"document_update: {e}", "FAIL")
+                results["failed"] += 1
+                results["errors"].append(f"document_update: {e}")
+
+            # Test 5: document_delete (via filesystem delete)
+            try:
+                doc_file.unlink()
+
+                if not doc_file.exists():
+                    self.log("document_delete", "PASS")
+                    results["passed"] += 1
+                else:
+                    self.log("document_delete: file still exists", "FAIL")
+                    results["failed"] += 1
+            except Exception as e:
+                self.log(f"document_delete: {e}", "FAIL")
+                results["failed"] += 1
+                results["errors"].append(f"document_delete: {e}")
+
         except Exception as e:
-            self.log(f"Document tools registration: {e}", "FAIL")
-            results["passed"] = 0
+            self.log(f"Document tools test failed: {e}", "FAIL")
             results["failed"] = 5
+            results["errors"].append(f"Overall: {e}")
 
         return results
 

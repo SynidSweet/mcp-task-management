@@ -1,7 +1,13 @@
 """
-MCP tools for document management system integration.
-Refactored to use ONLY local file operations (documents.json).
-File monitor handles database sync automatically.
+MCP tools for document management - filesystem-only operations.
+
+All tools work exclusively with markdown files in /docs/ folder.
+UnifiedFileMonitor handles automatic sync to documentation table.
+
+Architecture:
+- Tools: Read/write markdown files in /docs/{type}/{name}.md
+- File Monitor: Syncs changes to/from documentation table in Supabase
+- No direct database operations in tools (follows task/sprint pattern)
 """
 
 import os
@@ -28,8 +34,8 @@ except ImportError:
 def get_supabase_client():
     """Get Supabase client with hardcoded credentials for document sync.
 
-    NOTE: This helper function is used by OTHER modules (like unified_file_monitor.py).
-    DO NOT REMOVE - only MCP tool functions have been refactored to use local files.
+    NOTE: This helper is used by UnifiedFileMonitor for database sync.
+    MCP tools do NOT use this - they work with filesystem only.
     """
     try:
         if not SUPABASE_AVAILABLE:
@@ -49,37 +55,70 @@ def get_supabase_client():
 from core.machine_id import get_machine_id
 
 
-def get_or_create_project_id(project_path):
-    """Get or create project ID for the current project.
+def get_or_create_project_id(project_manager):
+    """Get or create project ID using file-based project identification.
 
-    NOTE: This helper function is used by OTHER modules (like unified_file_monitor.py).
-    DO NOT REMOVE - only MCP tool functions have been refactored to use local files.
+    NOTE: This helper is used by UnifiedFileMonitor for database sync.
+    MCP tools do NOT use this - they work with filesystem only.
+
+    NEW: Uses .claude-tasks/data/project_id file for cross-machine identification.
+    Same repo on different machines = same project_id (from file).
+
+    Args:
+        project_manager: ProjectManager instance (not just path)
+
+    Returns:
+        Tuple of (project_id: str, error: str|None)
     """
     client, error = get_supabase_client()
     if error:
         return None, f"Supabase client error: {error}"
 
     try:
-        # First try to find existing project (using actual table column 'path')
-        result = client.table('projects').select('id').eq('path', str(project_path)).execute()
+        # 1. Get project_id from file (or generate new one)
+        project_id = project_manager.get_or_generate_project_id()
+
+        # 2. Get machine_id for this computer
+        try:
+            machine_id = get_machine_id()
+        except Exception as e:
+            return None, f"Machine ID error: {e}"
+
+        # 3. Check if this machine already registered for this project
+        result = client.table('projects').select('*')\
+            .eq('id', project_id)\
+            .eq('machine_id', machine_id)\
+            .execute()
 
         if result.data and len(result.data) > 0:
-            # Project exists, return its ID
-            return result.data[0]['id'], None
+            # Machine already registered, check if path changed
+            existing = result.data[0]
+            current_path = str(project_manager.project_path)
 
-        # Project doesn't exist, create it (using actual table columns 'name' and 'path')
-        project_name = os.path.basename(str(project_path))
-        new_project = {
-            'name': project_name,
-            'path': str(project_path)
+            if existing['path'] != current_path:
+                # Path changed on this machine, update it
+                client.table('projects').update({
+                    'path': current_path,
+                    'updated_at': 'NOW()'
+                }).eq('id', project_id).eq('machine_id', machine_id).execute()
+
+            return project_id, None
+
+        # 4. This machine not yet registered for this project, create entry
+        project_name = os.path.basename(str(project_manager.project_path))
+        new_record = {
+            'id': project_id,  # From project_id file
+            'machine_id': machine_id,
+            'path': str(project_manager.project_path),
+            'name': project_name
         }
 
-        result = client.table('projects').insert(new_project).execute()
+        result = client.table('projects').insert(new_record).execute()
 
         if result.data and len(result.data) > 0:
-            return result.data[0]['id'], None
+            return project_id, None
         else:
-            return None, "Failed to create project"
+            return None, "Failed to create project record"
 
     except Exception as e:
         return None, f"Project error: {str(e)}"
@@ -95,7 +134,7 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
         description: str = "",
         content: str = ""
     ) -> Dict[str, Any]:
-        """Create new document - writes to documentation table and /docs/ filesystem.
+        """Create new document - writes markdown file to /docs/ filesystem.
 
         Args:
             document_title: Title of the document
@@ -104,27 +143,13 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
             content: Markdown content for the document
 
         Creates:
-            - Database record in documentation table
             - Markdown file at /docs/{document_type}/{document_title}.md
+            - File monitor automatically syncs to documentation table
         """
         if not project_manager.is_initialized():
             return {"status": "error", "error": "No project directory set"}
 
         try:
-            # Get Supabase client
-            client, error = get_supabase_client()
-            if error:
-                return {"status": "error", "error": f"Database error: {error}"}
-
-            # Get project ID
-            project_id, error = get_or_create_project_id(project_manager.project_path)
-            if error:
-                return {"status": "error", "error": f"Project error: {error}"}
-
-            machine_id = get_machine_id()
-            doc_id = str(uuid.uuid4())
-            timestamp = datetime.now(timezone.utc).isoformat()
-
             # Create file path (e.g., "guides/My Document.md")
             file_path = f"{document_type}/{document_title}.md"
 
@@ -135,24 +160,7 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
             if content:
                 full_content += content
 
-            # Write to documentation table (for frontend AI agents)
-            doc_record = {
-                'id': doc_id,
-                'project_id': project_id,
-                'machine_id': machine_id,
-                'doc_title': document_title,
-                'file_path': file_path,
-                'description': description,
-                'content': full_content,
-                'scope': 'project',
-                'is_global': False,
-                'created_at': timestamp,
-                'updated_at': timestamp
-            }
-
-            result = client.table('documentation').insert(doc_record).execute()
-
-            # Also write to filesystem (since DB→File sync needs async client)
+            # Write to filesystem - file monitor handles database sync
             docs_dir = project_manager.project_path / 'docs' / document_type
             docs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,10 +170,9 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
 
             return {
                 "status": "success",
-                "document_id": doc_id,
                 "file_path": file_path,
                 "filesystem_path": str(doc_file),
-                "message": f"Document created at {file_path}"
+                "message": f"Document created at {file_path} (will auto-sync to database)"
             }
 
         except Exception as e:
@@ -178,64 +185,74 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
         content: str = None,
         description: str = None
     ) -> Dict[str, Any]:
-        """Update existing document in documentation table and filesystem.
+        """Update existing document - modifies markdown file in /docs/ filesystem.
 
         Args:
             file_path: Path to document (e.g., "guides/My Document.md")
-            content: New markdown content (optional)
-            description: New description (optional)
+            content: New markdown content (replaces entire file)
+            description: New description (updates second paragraph after title)
 
-        Updates both database and /docs/ file.
+        Updates:
+            - Markdown file at /docs/{file_path}
+            - File monitor automatically syncs to documentation table
         """
         if not project_manager.is_initialized():
             return {"status": "error", "error": "No project directory set"}
 
         try:
-            # Get Supabase client
-            client, error = get_supabase_client()
-            if error:
-                return {"status": "error", "error": f"Database error: {error}"}
-
-            # Get project ID
-            project_id, error = get_or_create_project_id(project_manager.project_path)
-            if error:
-                return {"status": "error", "error": f"Project error: {error}"}
-
-            # Find document in database
-            result = client.table('documentation')\
-                .select('*')\
-                .eq('project_id', project_id)\
-                .eq('file_path', file_path)\
-                .execute()
-
-            if not result.data:
+            # Check if file exists
+            doc_file = project_manager.project_path / 'docs' / file_path
+            if not doc_file.exists():
                 return {"status": "error", "error": f"Document not found: {file_path}"}
 
-            doc = result.data[0]
-            doc_id = doc['id']
-            timestamp = datetime.now(timezone.utc).isoformat()
+            updates_applied = []
 
-            # Update database
-            updates = {'updated_at': timestamp}
-            if description is not None:
-                updates['description'] = description
+            # If full content provided, replace entire file
             if content is not None:
-                updates['content'] = content
-
-            client.table('documentation').update(updates).eq('id', doc_id).execute()
-
-            # Update filesystem file
-            doc_file = project_manager.project_path / 'docs' / file_path
-            if doc_file.exists() and content is not None:
                 with open(doc_file, 'w', encoding='utf-8') as f:
                     f.write(content)
+                updates_applied.append('content')
+
+            # If only description provided, update the description paragraph
+            elif description is not None:
+                with open(doc_file, 'r', encoding='utf-8') as f:
+                    existing_content = f.read()
+
+                # Parse and update description (second paragraph after title)
+                lines = existing_content.split('\n')
+                new_lines = []
+                found_title = False
+                description_updated = False
+
+                for i, line in enumerate(lines):
+                    if line.startswith('# ') and not found_title:
+                        # Found title, add it and description after
+                        new_lines.append(line)
+                        new_lines.append('')
+                        new_lines.append(description)
+                        found_title = True
+                        description_updated = True
+                        # Skip old description (next non-empty line)
+                        continue
+                    elif found_title and not description_updated:
+                        # Skip old description paragraph
+                        if line.strip() == '':
+                            continue
+                        description_updated = True
+
+                    if description_updated or not found_title:
+                        new_lines.append(line)
+
+                with open(doc_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(new_lines))
+                updates_applied.append('description')
 
             return {
                 "status": "success",
-                "document_id": doc_id,
                 "file_path": file_path,
-                "updates_applied": list(updates.keys()),
-                "message": f"Document updated: {file_path}"
+                "filesystem_path": str(doc_file),
+                "updates_applied": updates_applied,
+                "message": f"Document updated: {file_path} (will auto-sync to database)"
             }
 
         except Exception as e:
@@ -247,62 +264,87 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
         query: str = None,
         limit: int = 50
     ) -> Dict[str, Any]:
-        """Query documents from documentation table.
+        """Query documents - searches markdown files in /docs/ folder.
 
         Args:
-            query: Optional text search in title/description/content
+            query: Optional text search in title/content
             limit: Maximum results (default: 50)
 
-        Returns list of documents from /docs/ folder.
+        Returns list of documents found in /docs/ folder.
         """
         if not project_manager.is_initialized():
             return {"status": "error", "error": "No project directory set"}
 
         try:
-            # Get Supabase client
-            client, error = get_supabase_client()
-            if error:
-                return {"status": "error", "error": f"Database error: {error}"}
+            import glob
+            from pathlib import Path
 
-            # Get project ID
-            project_id, error = get_or_create_project_id(project_manager.project_path)
-            if error:
-                return {"status": "error", "error": f"Project error: {error}"}
-
-            # Query documentation table
-            db_query = client.table('documentation').select('*').eq('project_id', project_id)
-
-            # Apply text search if provided
-            if query:
-                # Note: Supabase textSearch requires full-text search setup
-                # For now, fetch all and filter in Python
-                result = db_query.execute()
-                docs = result.data or []
-
-                # Filter by query
-                query_lower = query.lower()
-                docs = [
-                    d for d in docs
-                    if query_lower in d.get('doc_title', '').lower()
-                    or query_lower in d.get('description', '').lower()
-                    or query_lower in d.get('content', '').lower()
-                ]
-            else:
-                result = db_query.limit(limit).execute()
-                docs = result.data or []
-
-            # Format response
-            documents = [
-                {
-                    "id": doc['id'],
-                    "title": doc.get('doc_title'),
-                    "file_path": doc.get('file_path'),
-                    "description": doc.get('description', ''),
-                    "created_at": doc.get('created_at'),
-                    "updated_at": doc.get('updated_at')
+            docs_dir = project_manager.project_path / 'docs'
+            if not docs_dir.exists():
+                return {
+                    "status": "success",
+                    "document_count": 0,
+                    "documents": []
                 }
-                for doc in docs[:limit]
-            ]
+
+            # Find all markdown files
+            md_files = list(docs_dir.glob('**/*.md'))
+
+            documents = []
+            for md_file in md_files:
+                try:
+                    # Read file content
+                    with open(md_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    # Extract title from first # header
+                    title = md_file.stem
+                    for line in content.split('\n'):
+                        if line.startswith('# '):
+                            title = line[2:].strip()
+                            break
+
+                    # Extract description (first non-header paragraph)
+                    description = ""
+                    for line in content.split('\n'):
+                        stripped = line.strip()
+                        if stripped and not stripped.startswith('#') and len(stripped) > 10:
+                            description = stripped[:200]
+                            break
+
+                    # Get relative path from docs/
+                    relative_path = md_file.relative_to(docs_dir)
+                    file_path = str(relative_path).replace('\\', '/')
+
+                    # Apply query filter if provided
+                    if query:
+                        query_lower = query.lower()
+                        if not (query_lower in title.lower() or
+                                query_lower in description.lower() or
+                                query_lower in content.lower()):
+                            continue
+
+                    # Get file stats
+                    stats = md_file.stat()
+
+                    documents.append({
+                        "title": title,
+                        "file_path": file_path,
+                        "description": description,
+                        "filesystem_path": str(md_file),
+                        "created_at": datetime.fromtimestamp(stats.st_ctime, timezone.utc).isoformat(),
+                        "updated_at": datetime.fromtimestamp(stats.st_mtime, timezone.utc).isoformat()
+                    })
+
+                except Exception as e:
+                    # Skip files that can't be read
+                    continue
+
+            # Sort by updated_at (most recent first)
+            documents.sort(key=lambda d: d['updated_at'], reverse=True)
+
+            # Apply limit
+            documents = documents[:limit]
 
             return {
                 "status": "success",
@@ -318,49 +360,53 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
     async def document_get(
         file_path: str
     ) -> Dict[str, Any]:
-        """Get document from documentation table by file path.
+        """Get document - reads markdown file from /docs/ folder.
 
         Args:
             file_path: Path to document (e.g., "guides/My Document.md")
 
-        Returns document with full content.
+        Returns document with full content from filesystem.
         """
         if not project_manager.is_initialized():
             return {"status": "error", "error": "No project directory set"}
 
         try:
-            # Get Supabase client
-            client, error = get_supabase_client()
-            if error:
-                return {"status": "error", "error": f"Database error: {error}"}
-
-            # Get project ID
-            project_id, error = get_or_create_project_id(project_manager.project_path)
-            if error:
-                return {"status": "error", "error": f"Project error: {error}"}
-
-            # Find document in database
-            result = client.table('documentation')\
-                .select('*')\
-                .eq('project_id', project_id)\
-                .eq('file_path', file_path)\
-                .execute()
-
-            if not result.data:
+            # Read document from filesystem
+            doc_file = project_manager.project_path / 'docs' / file_path
+            if not doc_file.exists():
                 return {"status": "error", "error": f"Document not found: {file_path}"}
 
-            doc = result.data[0]
+            with open(doc_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Extract title from first # header
+            title = doc_file.stem
+            for line in content.split('\n'):
+                if line.startswith('# '):
+                    title = line[2:].strip()
+                    break
+
+            # Extract description (first non-header paragraph)
+            description = ""
+            for line in content.split('\n'):
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#') and len(stripped) > 10:
+                    description = stripped[:200]
+                    break
+
+            # Get file stats
+            stats = doc_file.stat()
 
             return {
                 "status": "success",
                 "document": {
-                    "id": doc['id'],
-                    "title": doc.get('doc_title'),
-                    "file_path": doc.get('file_path'),
-                    "description": doc.get('description'),
-                    "content": doc.get('content'),
-                    "created_at": doc.get('created_at'),
-                    "updated_at": doc.get('updated_at')
+                    "title": title,
+                    "file_path": file_path,
+                    "description": description,
+                    "content": content,
+                    "filesystem_path": str(doc_file),
+                    "created_at": datetime.fromtimestamp(stats.st_ctime, timezone.utc).isoformat(),
+                    "updated_at": datetime.fromtimestamp(stats.st_mtime, timezone.utc).isoformat()
                 }
             }
 
@@ -372,53 +418,30 @@ def register_document_tools(mcp, project_manager, server=None, tool_filter=None)
     async def document_delete(
         file_path: str
     ) -> Dict[str, Any]:
-        """Delete document from documentation table and filesystem.
+        """Delete document - removes markdown file from /docs/ filesystem.
 
         Args:
             file_path: Path to document (e.g., "guides/My Document.md")
 
-        Removes both database record and file.
+        Removes:
+            - Markdown file at /docs/{file_path}
+            - File monitor automatically removes from documentation table
         """
         if not project_manager.is_initialized():
             return {"status": "error", "error": "No project directory set"}
 
         try:
-            # Get Supabase client
-            client, error = get_supabase_client()
-            if error:
-                return {"status": "error", "error": f"Database error: {error}"}
-
-            # Get project ID
-            project_id, error = get_or_create_project_id(project_manager.project_path)
-            if error:
-                return {"status": "error", "error": f"Project error: {error}"}
-
-            # Find document in database
-            result = client.table('documentation')\
-                .select('*')\
-                .eq('project_id', project_id)\
-                .eq('file_path', file_path)\
-                .execute()
-
-            if not result.data:
+            # Delete from filesystem - file monitor handles database removal
+            doc_file = project_manager.project_path / 'docs' / file_path
+            if not doc_file.exists():
                 return {"status": "error", "error": f"Document not found: {file_path}"}
 
-            doc = result.data[0]
-            doc_id = doc['id']
-
-            # Delete from database
-            client.table('documentation').delete().eq('id', doc_id).execute()
-
-            # Delete from filesystem
-            doc_file = project_manager.project_path / 'docs' / file_path
-            if doc_file.exists():
-                doc_file.unlink()
+            doc_file.unlink()
 
             return {
                 "status": "success",
-                "document_id": doc_id,
                 "file_path": file_path,
-                "message": f"Document deleted: {file_path}"
+                "message": f"Document deleted: {file_path} (will auto-remove from database)"
             }
 
         except Exception as e:

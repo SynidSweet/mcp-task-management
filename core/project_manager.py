@@ -34,7 +34,7 @@ class ProjectManager:
             self.template_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize JSON files if they don't exist
-        for filename in ["tasks.json", "sprints.json", "backlog.json", "journal.json", "documents.json"]:
+        for filename in ["tasks.json", "sprints.json", "journal.json", "documents.json"]:
             file_path = self.data_dir / filename
             if not file_path.exists():
                 initial_data = {
@@ -75,13 +75,64 @@ class ProjectManager:
         """Get path to template file"""
         if not self.template_dir:
             raise ValueError("No project directory set")
-        
+
         # Handle cases where template_type already includes .json extension
         if template_type.endswith('.json'):
             return self.template_dir / template_type
         else:
             return self.template_dir / f'{template_type}.json'
-    
+
+    def get_project_id_file(self) -> Path:
+        """Get path to project_id file.
+
+        This file contains the folder name that uniquely identifies this project
+        across all machines. It should be committed to version control.
+
+        Returns:
+            Path to .claude-tasks/data/project_id
+        """
+        if not self.data_dir:
+            raise ValueError("No project directory set")
+        return self.data_dir / 'project_id'
+
+    def read_project_id(self) -> Optional[str]:
+        """Read project_id from file.
+
+        Returns:
+            Folder name string if file exists, None otherwise
+        """
+        id_file = self.get_project_id_file()
+        if id_file.exists():
+            return id_file.read_text().strip()
+        return None
+
+    def write_project_id(self, project_id: str) -> None:
+        """Write project_id to file.
+
+        Args:
+            project_id: Folder name string to write
+        """
+        id_file = self.get_project_id_file()
+        # Ensure data directory exists
+        id_file.parent.mkdir(parents=True, exist_ok=True)
+        id_file.write_text(project_id + '\n')
+
+    def get_or_generate_project_id(self) -> str:
+        """Get project_id from file, or generate and save new one.
+
+        This is the primary method for getting the project's unique identifier.
+        If the file doesn't exist, generates project_id from folder name and saves it.
+
+        Returns:
+            Folder name string identifying this project
+        """
+        project_id = self.read_project_id()
+        if not project_id:
+            # Use folder name as project_id instead of UUID
+            project_id = self.project_path.name
+            self.write_project_id(project_id)
+        return project_id
+
     def set_project_directory(self, project_dir: str) -> Dict[str, Any]:
         """Set project directory"""
         project_path = Path(project_dir).resolve()

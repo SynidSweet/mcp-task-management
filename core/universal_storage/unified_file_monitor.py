@@ -416,7 +416,7 @@ class UnifiedFileMonitor:
             else:
                 project_manager = self._find_project_for_file(file_path)
                 if project_manager:
-                    project_id, _ = get_or_create_project_id(project_manager.project_path)
+                    project_id, _ = get_or_create_project_id(project_manager)
                 else:
                     project_id = None
 
@@ -655,7 +655,7 @@ class UnifiedFileMonitor:
             self._sync_in_progress.discard(sync_key)
 
     async def _sync_mcp_config(self, file_path: Path, change_type: str, from_database: bool = False):
-        """Sync MCP config file (.claude-mcp-config.json) to Supabase mcp_configs table with loop prevention"""
+        """Sync MCP config file (.claude-mcp-config.json or .mcp.json) to normalized mcp_config_files and mcp_servers tables"""
         if self._should_skip_sync(file_path, from_database=from_database):
             return
 
@@ -670,8 +670,8 @@ class UnifiedFileMonitor:
 
             print(f"🔄 MCP config {change_type}: {file_path.name}")
 
-            # Only sync if this is the MCP config file
-            if file_path.name != '.claude-mcp-config.json':
+            # Support both .claude-mcp-config.json and .mcp.json
+            if file_path.name not in ['.claude-mcp-config.json', '.mcp.json']:
                 return
 
             # Read MCP config file
@@ -690,30 +690,90 @@ class UnifiedFileMonitor:
 
             machine_id = get_machine_id()
 
-            # Create MCP config record
-            mcp_config_record = {
-                'id': str(uuid.uuid4()),
+            # Determine file type and config name
+            if file_path.name == '.claude-mcp-config.json':
+                file_type = 'claude-mcp-config'
+                config_name = 'claude_mcp_config'
+            else:
+                file_type = 'mcp'
+                config_name = 'mcp_config'
+
+            # Extract metadata (if present)
+            metadata = config_data.get('_metadata', {})
+
+            # Check if config file already exists (to preserve ID for upsert)
+            existing_query = client.table('mcp_config_files').select('id').eq('machine_id', machine_id).eq('config_name', config_name)
+            existing = existing_query.execute()
+            config_file_id = existing.data[0]['id'] if existing.data else str(uuid.uuid4())
+
+            # Create config file record
+            config_file_record = {
+                'id': config_file_id,
                 'machine_id': machine_id,
-                'config_name': 'claude_mcp_config',
+                'config_name': config_name,
                 'file_path': str(file_path.relative_to(self.claude_home)),
-                'config_data': config_data,  # Store as JSONB
+                'file_type': file_type,
+                'metadata_machine_id': metadata.get('machine_id'),
+                'metadata_created_at': metadata.get('created_at'),
+                'metadata_auto_generated': metadata.get('auto_generated', False),
+                'metadata_repo_root': metadata.get('repo_root'),
                 'scope': 'global',
                 'is_global': True,
                 'created_at': 'now()',
                 'updated_at': 'now()'
             }
 
-            # Upsert to mcp_configs table
-            result = client.table('mcp_configs').upsert(mcp_config_record).execute()
-            if result.data:
-                print(f"   ✅ Synced MCP config to cloud")
+            # Upsert config file
+            result = client.table('mcp_config_files').upsert(config_file_record).execute()
+            if not result.data:
+                print(f"   ⚠️  Failed to sync config file metadata")
+                return
+
+            # Delete existing servers for this config (to handle removals)
+            client.table('mcp_servers').delete().eq('config_file_id', config_file_id).execute()
+
+            # Insert server records from mcpServers object
+            mcp_servers = config_data.get('mcpServers', {})
+            if mcp_servers:
+                server_records = []
+                for idx, (server_name, server_config) in enumerate(mcp_servers.items()):
+                    # Detect transport type (handle both 'type' and 'transport' keys)
+                    transport_type = server_config.get('type') or server_config.get('transport', 'stdio')
+
+                    server_record = {
+                        'id': str(uuid.uuid4()),
+                        'config_file_id': config_file_id,
+                        'machine_id': machine_id,
+                        'server_name': server_name,
+                        'transport_type': transport_type,
+                        'disabled': server_config.get('disabled', False),
+                        'always_allow': server_config.get('alwaysAllow', False),
+                        'command': server_config.get('command'),
+                        'args': server_config.get('args'),
+                        'env': server_config.get('env'),
+                        'url': server_config.get('url'),
+                        'headers': server_config.get('headers'),
+                        'sort_order': idx,
+                        'created_at': 'now()',
+                        'updated_at': 'now()'
+                    }
+                    server_records.append(server_record)
+
+                # Batch insert servers
+                result = client.table('mcp_servers').insert(server_records).execute()
+                if result.data:
+                    print(f"   ✅ Synced {len(server_records)} MCP server(s) to cloud")
+                else:
+                    print(f"   ⚠️  Failed to sync servers")
             else:
-                print(f"   ⚠️  Failed to sync MCP config")
+                print(f"   ℹ️  No MCP servers in config")
 
             self._last_sync_hashes[sync_key] = self._calculate_file_hash(file_path)
 
         except Exception as e:
             print(f"   ❌ MCP config sync failed: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self._sync_in_progress.discard(sync_key)
 
@@ -759,7 +819,7 @@ class UnifiedFileMonitor:
                 relative_path = file_path.relative_to(project_path / 'docs')
 
                 # Get project ID for project-scoped docs
-                project_id, project_error = get_or_create_project_id(project_path)
+                project_id, project_error = get_or_create_project_id(project_manager)
                 if project_error:
                     print(f"   ⚠️  Project ID error: {project_error}")
                     project_id = None
@@ -876,7 +936,7 @@ class UnifiedFileMonitor:
                 return
 
             # Get project ID
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 print(f"   ⚠️  Project ID error: {project_error}")
                 return
@@ -951,7 +1011,7 @@ class UnifiedFileMonitor:
                 return
 
             # Get project ID
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 print(f"   ⚠️  Project ID error: {project_error}")
                 return
@@ -1023,7 +1083,7 @@ class UnifiedFileMonitor:
                 return
 
             # Get project ID
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 print(f"   ⚠️  Project ID error: {project_error}")
                 return
@@ -1107,7 +1167,7 @@ class UnifiedFileMonitor:
                 return
 
             # Get project ID
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 print(f"   ⚠️  Project ID error: {project_error}")
                 return
@@ -1216,7 +1276,7 @@ class UnifiedFileMonitor:
                 return
 
             # Get project ID
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 print(f"   ⚠️  Project ID error: {project_error}")
                 return
@@ -1333,7 +1393,7 @@ class UnifiedFileMonitor:
                 print(f"   ⚠️  tasks.json: Database error: {error}")
                 return
 
-            project_id, error = get_or_create_project_id(project_manager.project_path)
+            project_id, error = get_or_create_project_id(project_manager)
             if error:
                 return
 
@@ -1436,7 +1496,7 @@ class UnifiedFileMonitor:
                 print(f"   ⚠️  sprints.json: Database error: {error}")
                 return
 
-            project_id, error = get_or_create_project_id(project_manager.project_path)
+            project_id, error = get_or_create_project_id(project_manager)
             if error:
                 return
 
@@ -1532,7 +1592,7 @@ class UnifiedFileMonitor:
                 print(f"   ⚠️  journal.json: Database error: {error}")
                 return
 
-            project_id, error = get_or_create_project_id(project_manager.project_path)
+            project_id, error = get_or_create_project_id(project_manager)
             if error:
                 return
 
@@ -1649,7 +1709,7 @@ class UnifiedFileMonitor:
                 print(f"   ⚠️  documents.json: Database error: {error}")
                 return
 
-            project_id, error = get_or_create_project_id(project_manager.project_path)
+            project_id, error = get_or_create_project_id(project_manager)
             if error:
                 return
 
@@ -1774,7 +1834,7 @@ class UnifiedFileMonitor:
                 print(f"   ⚠️  specifications.json: Database error: {error}")
                 return
 
-            project_id, error = get_or_create_project_id(project_manager.project_path)
+            project_id, error = get_or_create_project_id(project_manager)
             if error:
                 return
 

@@ -33,15 +33,33 @@ def run_migration(migration_file: str):
     # Execute SQL using exec_ddl function
     try:
         result = client.rpc('exec_ddl', {'sql_statement': sql}).execute()
-        print("✅ Migration executed successfully")
-        return True
+
+        # Check if exec_ddl returned an error message
+        if isinstance(result.data, str):
+            if result.data.startswith('Error:') or 'error' in result.data.lower():
+                print(f"❌ Migration failed: {result.data}")
+                print("\n⚠️  Manual execution required:")
+                print(f"1. Open Supabase SQL Editor at: https://yxyfiatdrgelnvxopdsm.supabase.co")
+                print(f"2. Run the following SQL:\n")
+                print(f"3. Or copy from file: {migration_file}")
+                return False
+            elif result.data == 'Success':
+                print("✅ Migration executed successfully")
+                return True
+            else:
+                print(f"⚠️  Unexpected response: {result.data}")
+                print("Migration may have partially applied. Manual verification recommended.")
+                return False
+        else:
+            print(f"✅ Migration executed (response: {result.data})")
+            return True
+
     except Exception as e:
-        print(f"❌ Migration failed: {e}")
+        print(f"❌ Migration failed with exception: {e}")
         print("\n⚠️  Manual execution required:")
         print(f"1. Open Supabase SQL Editor at: https://yxyfiatdrgelnvxopdsm.supabase.co")
         print(f"2. Run the following SQL:\n")
-        print(sql)
-        print(f"\n3. Or copy from file: {migration_file}")
+        print(f"3. Or copy from file: {migration_file}")
         return False
 
 if __name__ == '__main__':

@@ -123,23 +123,38 @@ def register_your_tools(mcp, project_manager: ProjectManager):
 - **Hash-based loop prevention** - Won't re-sync unchanged content
 - **Entity-level sync** - Only changed items update
 
-**Synced entity types**: tasks, sprints, journal, requirements, templates, commands, agents, documentation, mcp_configs
+**Synced entity types**: tasks, sprints, journal, specifications, templates, commands, agents, documentation, mcp_config_files + mcp_servers (normalized)
 
 **Tools don't handle sync** - Just save JSON, monitor handles the rest.
 
 ## Database Schema
 
-**Flattened schema** with individual columns (see SCHEMA.md for complete details):
+**Flattened schema** with individual columns (see `../SCHEMA.md` for complete details):
 
-- **projects** - Multi-project isolation (project_id FK everywhere)
+- **projects** - Multi-project and multi-machine identification using **file-based project_id**
+  - Composite primary key: `(id, machine_id)`
+  - project_id from `.claude-tasks/data/project_id` file (commit to version control!)
+  - Same repo on different machines = same project_id, different rows
+  - Each machine stores its local path
 - **tasks** - Individual columns: id, title, description, status, priority, notes, dependencies (JSONB), completed_at, timestamps
 - **sprints** - id, title, status, dates, task_ids (JSONB)
 - **journal_sessions** - (note: table name is `journal_sessions` not `journal`)
 - **documentation** - Simple markdown docs from `/docs/*.md` files - auto-synced with title, path, and full content (no metadata files needed)
 - **specifications** - Requirements/specs management
 - **specifications_validated** - Human-approved specification snapshots (see Validation System below)
+- **mcp_config_files** + **mcp_servers** - Normalized MCP configuration storage (replaces old mcp_configs JSONB table)
+  - mcp_config_files: File metadata (.claude-mcp-config.json or .mcp.json)
+  - mcp_servers: Individual server configs with queryable columns (transport_type, command, url, etc.)
+  - 10-100x faster queries with indexed columns
 
 **Connection info**: URL and keys in `tools/document_tools.py:40`
+
+**Project Identification (Updated 2025-10-29)**:
+- Projects identified by folder name in `.claude-tasks/data/project_id` file
+- Same repository cloned on different machines shares same project_id
+- Database uses composite key `(project_id, machine_id)` for multi-machine support
+- Path field stores full filesystem path for programmatic use
+- See `../SCHEMA.md` "File-Based Project Identification" section for full details
 
 ## Specification Validation System
 

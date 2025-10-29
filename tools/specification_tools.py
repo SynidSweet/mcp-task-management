@@ -599,30 +599,68 @@ def get_supabase_client():
     except Exception as e:
         return None, str(e)
 
-def get_or_create_project_id(project_path):
-    """Get or create project ID for the current project."""
+def get_or_create_project_id(project_manager):
+    """Get or create project ID using file-based project identification.
+
+    NEW: Uses .claude-tasks/data/project_id file for cross-machine identification.
+    Same repo on different machines = same project_id (from file).
+
+    Args:
+        project_manager: ProjectManager instance (not just path)
+
+    Returns:
+        Tuple of (project_id: str, error: str|None)
+    """
     client, error = get_supabase_client()
     if error:
         return None, f"Supabase client error: {error}"
-    
+
     try:
-        result = client.rpc('get_or_create_project', {
-            'project_path': str(project_path),
-            'project_name': os.path.basename(str(project_path))
-        }).execute()
-        
-        # Handle newer Supabase client API - result is data directly or has data attribute
-        if hasattr(result, 'data'):
-            result_data = result.data
-            result_error = getattr(result, 'error', None)
+        # 1. Get project_id from file (or generate new one)
+        project_id = project_manager.get_or_generate_project_id()
+
+        # 2. Get machine_id for this computer
+        try:
+            machine_id = get_machine_id()
+        except Exception as e:
+            return None, f"Machine ID error: {e}"
+
+        # 3. Check if this machine already registered for this project
+        result = client.table('projects').select('*')\
+            .eq('id', project_id)\
+            .eq('machine_id', machine_id)\
+            .execute()
+
+        if result.data and len(result.data) > 0:
+            # Machine already registered, check if path changed
+            existing = result.data[0]
+            current_path = str(project_manager.project_path)
+
+            if existing['path'] != current_path:
+                # Path changed on this machine, update it
+                client.table('projects').update({
+                    'path': current_path,
+                    'updated_at': 'NOW()'
+                }).eq('id', project_id).eq('machine_id', machine_id).execute()
+
+            return project_id, None
+
+        # 4. This machine not yet registered for this project, create entry
+        project_name = os.path.basename(str(project_manager.project_path))
+        new_record = {
+            'id': project_id,  # From project_id file
+            'machine_id': machine_id,
+            'path': str(project_manager.project_path),
+            'name': project_name
+        }
+
+        result = client.table('projects').insert(new_record).execute()
+
+        if result.data and len(result.data) > 0:
+            return project_id, None
         else:
-            result_data = result
-            result_error = None
-            
-        if result_error:
-            return None, f"Project creation error: {result_error}"
-        
-        return result_data, None
+            return None, "Failed to create project record"
+
     except Exception as e:
         return None, f"Project error: {str(e)}"
 
@@ -870,7 +908,7 @@ def register_specification_tools(mcp, project_manager, tool_filter=None):
 
         try:
             # Get or create project ID for database operations
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 return build_error_response(DatabaseError(f"Project setup failed: {project_error}"))
 
@@ -987,7 +1025,7 @@ def register_specification_tools(mcp, project_manager, tool_filter=None):
 
         try:
             # Get project context
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 return build_error_response(DatabaseError(f"Project setup failed: {project_error}"))
 
@@ -1086,7 +1124,7 @@ def register_specification_tools(mcp, project_manager, tool_filter=None):
 
         try:
             # Get project context
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 return build_error_response(DatabaseError(f"Project setup failed: {project_error}"))
 
@@ -1231,7 +1269,7 @@ def register_specification_tools(mcp, project_manager, tool_filter=None):
 
         try:
             # Get project context
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 return build_error_response(DatabaseError(f"Project setup failed: {project_error}"))
 
@@ -1401,7 +1439,7 @@ def register_specification_tools(mcp, project_manager, tool_filter=None):
 
         try:
             # Get project context
-            project_id, project_error = get_or_create_project_id(project_manager.project_path)
+            project_id, project_error = get_or_create_project_id(project_manager)
             if project_error:
                 return build_error_response(DatabaseError(f"Project setup failed: {project_error}"))
 

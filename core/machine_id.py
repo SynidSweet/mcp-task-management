@@ -14,10 +14,19 @@ from typing import Dict, Any, Optional
 
 def get_machine_id() -> str:
     """
-    Get machine ID for this machine.
-    
+    Get machine ID for this computer.
+
+    IMPORTANT: machine_id identifies the physical computer, not individual
+    projects. All projects on this computer share the same machine_id.
+
     Single source of truth - all tools should use this function.
-    Reads from .claude-machine-config.json in MCP server directory.
+    Reads from global config at ~/.claude/.claude-machine-config.json
+
+    Returns:
+        machine_id string (e.g., "ubuntu-bokio-dev")
+
+    Raises:
+        ValueError: If machine_id not configured or invalid
     """
     config_file = get_machine_config_path()
     
@@ -39,30 +48,40 @@ def get_machine_id() -> str:
 
 
 def get_machine_config_path() -> Path:
-    """Get the path to the machine configuration file."""
-    # Find MCP server directory by locating this module's location
-    # This works regardless of working directory and is portable
-    current_file = Path(__file__).resolve()
-    mcp_server_dir = current_file.parent.parent  # core/machine_id.py -> mcp-server/
-    return mcp_server_dir / ".claude-machine-config.json"
+    """Get the path to the machine configuration file.
+
+    IMPORTANT: Returns GLOBAL config location shared across ALL projects
+    on this computer. machine_id identifies the physical machine, not
+    individual projects.
+
+    Returns:
+        Path to ~/.claude/.claude-machine-config.json (global config)
+    """
+    return Path.home() / ".claude" / ".claude-machine-config.json"
 
 
 def set_machine_id(machine_id: str) -> Dict[str, Any]:
     """
-    Set machine ID by creating/updating configuration file.
-    
+    Set machine ID by creating/updating global configuration file.
+
+    IMPORTANT: This sets the machine_id for the ENTIRE COMPUTER, not just
+    one project. All projects on this computer will share this machine_id.
+
     Args:
-        machine_id: Descriptive machine identifier
-        
+        machine_id: Descriptive machine identifier (e.g., "ubuntu-bokio-dev")
+
     Returns:
         Dict with status and details
     """
     try:
         config_file = get_machine_config_path()
-        
+
+        # Ensure ~/.claude directory exists
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+
         config = {
             "machine_id": machine_id,
-            "description": "Machine identifier for this MCP server instance",
+            "description": "Machine identifier for this computer (shared across all projects)",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "version": "1.0"
         }
