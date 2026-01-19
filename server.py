@@ -5,6 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Optional
+from contextlib import asynccontextmanager
 
 # Import spec utilities from .claude-specs
 spec_utils_path = Path.home() / '.claude' / '.claude-specs' / 'utils'
@@ -42,7 +43,6 @@ class MCPServer:
     """MCP Server with Simplified Architecture"""
 
     def __init__(self, project_dir: Optional[Path] = None):
-        self.mcp = FastMCP("claude-tasks")
         self.project_manager = ProjectManager(project_dir)
         self._initialized = self.project_manager.is_initialized()
 
@@ -63,29 +63,73 @@ class MCPServer:
 
         self.unified_monitor = None
         self._should_init_monitoring = self._initialized
+
+        # Create FastMCP with lifespan for proper async initialization
+        @asynccontextmanager
+        async def lifespan(app):
+            """Initialize file monitoring within FastMCP's event loop"""
+            import datetime
+            log_file = self.project_manager.project_path / ".claude-tasks" / "mcp_lifespan.log"
+            def log(msg):
+                with open(log_file, 'a') as f:
+                    f.write(f"{datetime.datetime.now().isoformat()} - {msg}\n")
+
+            log("LIFESPAN: Entering lifespan context...")
+            if self._should_init_monitoring:
+                log("LIFESPAN: Initializing file monitor...")
+                await self._initialize_unified_monitoring()
+                log(f"LIFESPAN: File monitor initialized! unified_monitor={self.unified_monitor}")
+                if self.unified_monitor:
+                    log(f"LIFESPAN: Monitor loop={self.unified_monitor.loop}, is_closed={self.unified_monitor.loop.is_closed() if self.unified_monitor.loop else 'N/A'}")
+            else:
+                log("LIFESPAN: Skipping monitor (project not initialized)")
+            yield
+            # Cleanup on shutdown
+            log("LIFESPAN: Exiting lifespan, cleaning up...")
+            if self.unified_monitor:
+                await self.unified_monitor.stop_monitoring()
+                log("LIFESPAN: File monitor stopped")
+
+        self.mcp = FastMCP("claude-tasks", lifespan=lifespan)
         self._register_all_tools()
     
     async def _initialize_unified_monitoring(self):
         """Initialize unified file monitoring for all auto-sync."""
+        import datetime
+        log_file = self.project_manager.project_path / ".claude-tasks" / "mcp_lifespan.log"
+        def log(msg):
+            with open(log_file, 'a') as f:
+                f.write(f"{datetime.datetime.now().isoformat()} - {msg}\n")
+
         try:
             from core.universal_storage.unified_file_monitor import UnifiedFileMonitor
 
+            log("_initialize: Creating UnifiedFileMonitor...")
             self.unified_monitor = UnifiedFileMonitor()
+
+            log("_initialize: Calling initialize()...")
             await self.unified_monitor.initialize()
+
+            log("_initialize: Calling register_global_resources()...")
             await self.unified_monitor.register_global_resources()
 
             if self._initialized:
                 project_id = str(self.project_manager.project_path)
+                log(f"_initialize: Calling register_project(project_id={project_id})...")
                 await self.unified_monitor.register_project(
                     project_id=project_id,
                     project_path=self.project_manager.project_path,
                     project_manager=self.project_manager
                 )
 
-            await self.unified_monitor.start_monitoring()
+            log("_initialize: Calling start_monitoring()...")
+            result = await self.unified_monitor.start_monitoring()
+            log(f"_initialize: start_monitoring() returned: {result}")
+            log(f"_initialize: Observer running={self.unified_monitor.observer.is_alive() if hasattr(self.unified_monitor.observer, 'is_alive') else 'unknown'}")
             print("✅ Unified file monitoring initialized and started")
 
         except Exception as e:
+            log(f"_initialize: ERROR: {e}")
             print(f"⚠️ Unified monitoring initialization failed: {e}")
             import traceback
             traceback.print_exc()
@@ -124,18 +168,7 @@ class MCPServer:
         print(f"🎯 Simplified Architecture Complete: {registered_count}/{len(tool_registrations)} modules loaded")
     
     def run(self):
-        """Run the MCP server"""
-        # Initialize monitoring before running server
-        import asyncio
-        if self._initialized:
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._initialize_unified_monitoring())
-                loop.close()
-            except Exception as e:
-                print(f"⚠️ Could not initialize monitoring: {e}")
-
+        """Run the MCP server (monitoring initializes via lifespan)"""
         return self.mcp.run()
 
 

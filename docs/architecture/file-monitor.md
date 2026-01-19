@@ -41,16 +41,16 @@ Located in `.claude-tasks/data/`:
 - **tasks.json** → `tasks` table
 - **sprints.json** → `sprints` table
 - **journal.json** → `journal_sessions` table
-- **documents.json** → `documents` + `document_sections` tables
-- **requirements.json** → `requirements` table
+- **specifications.json** → `specifications` table (with requirements/constraints in separate tables)
 
 ### Global Files
 Located in `~/.claude/`:
-- **templates/*.json** → `templates` table
 - **commands/*.md** → `commands` table
 - **agents/*.md** → `agents` table
+- **scripts/*.py** → `scripts` table
 - **docs/**/*.md** → `documentation` table (recursive)
 - **.claude-mcp-config.json** or **.mcp.json** → `mcp_config_files` + `mcp_servers` tables (normalized)
+- **.claude-tasks/templates/*.json** → `template_tasks` and `template_sprints` tables (normalized)
 
 ## How It Works
 
@@ -116,9 +116,9 @@ async def _handle_file_change(self, file_path: str, change_type: str):
 async def start_database_subscriptions(self):
     """Start Supabase realtime subscriptions for all entity tables"""
     tables = [
-        'tasks', 'sprints', 'journal_sessions', 'requirements',
-        'documents', 'templates', 'commands', 'agents',
-        'documentation', 'mcp_configs'
+        'tasks', 'sprints', 'journal_sessions', 'specifications',
+        'template_tasks', 'template_sprints', 'commands', 'agents', 'scripts',
+        'documentation', 'mcp_config_files', 'mcp_servers'
     ]
 
     for table in tables:
@@ -458,12 +458,13 @@ Paths are registered automatically:
 - **Project**: On `register_project()`
 
 ### Monitored Entity Types
-All 10 entity types are hardcoded:
+All entity types are monitored:
 ```python
 tables = [
-    'tasks', 'sprints', 'journal_sessions', 'requirements',
-    'documents', 'templates', 'commands', 'agents',
-    'documentation', 'mcp_configs'
+    'tasks', 'sprints', 'journal_sessions', 'specifications',
+    'template_tasks', 'template_sprints', 'commands', 'agents', 'scripts',
+    'documentation', 'mcp_config_files', 'mcp_servers',
+    'mcp_tools', 'mcp_bundles', 'mcp_bundle_tools'
 ]
 ```
 
@@ -511,7 +512,7 @@ save_json_data(file_path, data)
 
 The UnifiedFileMonitor provides **automatic, reliable, bidirectional synchronization** between local JSON files and Supabase cloud database:
 
-- **10 entity types** synced automatically
+- **Multiple entity types** synced automatically (tasks, sprints, specifications, templates, etc.)
 - **Bidirectional**: File ↔ Cloud
 - **Loop prevention**: Triple-layer protection
 - **Performance**: <200ms end-to-end sync

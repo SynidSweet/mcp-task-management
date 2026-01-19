@@ -3,10 +3,11 @@ import json
 from datetime import datetime
 from typing import Dict, Any, List
 from core.project_manager import ProjectManager
+from core.machine_id import get_machine_id
 from utils.helpers import (
-    handle_error, 
+    handle_error,
     check_project_initialized,
-    load_json_data, 
+    load_json_data,
     save_json_data,
     create_task_id,
     get_timestamp,
@@ -65,6 +66,8 @@ def register_task_tools(mcp, project_manager: ProjectManager, tool_filter=None):
                     "status": "pending",
                     "parent_task_id": parent_task_id if parent_task_id else None,
                     "child_task_ids": [],
+                    "project_id": project_manager.get_or_generate_project_id(),
+                    "machine_id": get_machine_id(),
                     "created_at": get_timestamp(),
                     "updated_at": get_timestamp()
                 }

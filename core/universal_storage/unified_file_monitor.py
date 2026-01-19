@@ -66,16 +66,40 @@ class UnifiedFileEventHandler(FileSystemEventHandler):
         if not event.is_directory:
             self._schedule_sync(event.src_path, 'deleted')
 
+    def on_moved(self, event: FileSystemEvent):
+        """Handle file move/rename (catches atomic writes)"""
+        if not event.is_directory:
+            # Atomic write operations: .tmp file moved to actual file
+            # We want to sync the destination file
+            self._schedule_sync(event.dest_path, 'modified')
+
     def _schedule_sync(self, file_path: str, change_type: str):
         """Schedule async sync operation"""
+        # DEBUG: Log every file change detection
+        import datetime
+        from pathlib import Path
+        log_file = Path("/home/dev/projects/mcp-management-system/dev/mcp-server/.claude-tasks/file_monitor_events.log")
+        with open(log_file, 'a') as f:
+            f.write(f"{datetime.datetime.now().isoformat()} - DETECTED: {change_type} {file_path}\n")
+            f.write(f"   loop={self.loop}, is_closed={self.loop.is_closed() if self.loop else 'None'}\n")
+
         if self.loop and not self.loop.is_closed():
             try:
+                with open(log_file, 'a') as f:
+                    f.write(f"   → Scheduling sync coroutine\n")
                 asyncio.run_coroutine_threadsafe(
                     self.sync_callback(file_path, change_type),
                     self.loop
                 )
+                with open(log_file, 'a') as f:
+                    f.write(f"   → Sync scheduled successfully\n")
             except Exception as e:
                 print(f"⚠️ Failed to schedule sync for {file_path}: {e}")
+                with open(log_file, 'a') as f:
+                    f.write(f"   → ERROR scheduling: {e}\n")
+        else:
+            with open(log_file, 'a') as f:
+                f.write(f"   → SKIPPED: loop closed or None\n")
 
 
 class UnifiedFileMonitor:
@@ -213,8 +237,59 @@ class UnifiedFileMonitor:
             self.global_initialized = True
             print(f"✅ Global resources registered for monitoring")
 
+            # Perform initial sync for global resources
+            await self._initial_sync_global_resources()
+
         except Exception as e:
             print(f"⚠️ Failed to register global resources: {e}")
+
+    async def _initial_sync_global_resources(self):
+        """Perform initial sync for all global (user-level) resources"""
+        print("\n" + "="*60)
+        print("🔄 INITIAL SYNC: Global resources")
+        print("="*60)
+
+        # Global templates
+        global_templates = self.claude_home / '.claude-tasks' / 'templates'
+        if global_templates.exists():
+            try:
+                await self._initial_sync_templates(global_templates)
+            except Exception as e:
+                print(f"   ⚠️  global templates: {e}")
+
+        # Global commands
+        global_commands = self.claude_home / 'commands'
+        if global_commands.exists():
+            try:
+                await self._initial_sync_commands(global_commands)
+            except Exception as e:
+                print(f"   ⚠️  global commands: {e}")
+
+        # Global agents
+        global_agents = self.claude_home / 'agents'
+        if global_agents.exists():
+            try:
+                await self._initial_sync_agents(global_agents)
+            except Exception as e:
+                print(f"   ⚠️  global agents: {e}")
+
+        # Global documentation
+        global_docs = self.claude_home / 'docs'
+        if global_docs.exists():
+            try:
+                await self._initial_sync_documentation(global_docs)
+            except Exception as e:
+                print(f"   ⚠️  global documentation: {e}")
+
+        # Global MCP config
+        global_mcp_config = self.claude_home / '.claude-mcp-config.json'
+        if global_mcp_config.exists():
+            try:
+                await self._initial_sync_mcp_config(global_mcp_config)
+            except Exception as e:
+                print(f"   ⚠️  global mcp_config: {e}")
+
+        print("="*60 + "\n")
 
     async def register_project(self, project_id: str, project_path: Path, project_manager):
         """
@@ -1367,6 +1442,51 @@ class UnifiedFileMonitor:
                 except Exception as e:
                     print(f"   ⚠️  {filename}: {e}")
 
+        # Initial sync for documentation files in /docs folder
+        docs_dir = project_path / 'docs'
+        if docs_dir.exists():
+            try:
+                await self._initial_sync_documentation(docs_dir)
+            except Exception as e:
+                print(f"   ⚠️  documentation: {e}")
+
+        # Initial sync for project templates
+        templates_dir = project_path / '.claude-tasks' / 'templates'
+        if templates_dir.exists():
+            try:
+                await self._initial_sync_templates(templates_dir)
+            except Exception as e:
+                print(f"   ⚠️  templates: {e}")
+
+        # Initial sync for project commands
+        commands_dir = project_path / '.claude' / 'commands'
+        if commands_dir.exists():
+            try:
+                await self._initial_sync_commands(commands_dir)
+            except Exception as e:
+                print(f"   ⚠️  commands: {e}")
+
+        # Initial sync for project agents
+        agents_dir = project_path / '.claude' / 'agents'
+        if agents_dir.exists():
+            try:
+                await self._initial_sync_agents(agents_dir)
+            except Exception as e:
+                print(f"   ⚠️  agents: {e}")
+
+        # Initial sync for project MCP config
+        mcp_config_files = [
+            project_path / '.mcp.json',
+            project_path / '.claude-mcp-config.json'
+        ]
+        for config_file in mcp_config_files:
+            if config_file.exists():
+                try:
+                    await self._initial_sync_mcp_config(config_file)
+                    break  # Only sync one config file
+                except Exception as e:
+                    print(f"   ⚠️  mcp_config: {e}")
+
         print("="*60 + "\n")
 
     async def _initial_sync_tasks_entities(self, file_path: Path, project_manager):
@@ -1931,6 +2051,133 @@ class UnifiedFileMonitor:
 
         except Exception as e:
             print(f"   ❌ specifications.json initial sync failed: {e}")
+
+    async def _initial_sync_documentation(self, docs_dir: Path):
+        """Initial sync for documentation files in /docs folder"""
+        try:
+            # Find all .md files recursively in docs folder
+            md_files = list(docs_dir.rglob('*.md'))
+
+            if not md_files:
+                print(f"   ℹ️  documentation: No markdown files found")
+                return
+
+            print(f"   🔄 documentation: Syncing {len(md_files)} markdown files...")
+
+            synced = 0
+            for md_file in md_files:
+                try:
+                    # Use the existing _sync_doc_markdown_file method to sync each file
+                    await self._sync_doc_markdown_file(md_file, 'created', from_database=False)
+                    synced += 1
+                except Exception as e:
+                    print(f"      ⚠️  Skipped {md_file.name}: {str(e)[:80]}")
+                    continue
+
+            print(f"   ✅ documentation: {synced} files synced to DB")
+
+        except Exception as e:
+            print(f"   ❌ documentation initial sync failed: {e}")
+
+    async def _initial_sync_templates(self, templates_dir: Path):
+        """Initial sync for template files in .claude-tasks/templates folder"""
+        try:
+            # Find all .json files in templates folder
+            json_files = list(templates_dir.glob('*.json'))
+
+            if not json_files:
+                print(f"   ℹ️  templates: No template files found")
+                return
+
+            print(f"   🔄 templates: Syncing {len(json_files)} template files...")
+
+            synced = 0
+            for json_file in json_files:
+                try:
+                    # Use the existing _sync_template_file method to sync each file
+                    await self._sync_template_file(json_file, 'created', from_database=False)
+                    synced += 1
+                except Exception as e:
+                    print(f"      ⚠️  Skipped {json_file.name}: {str(e)[:80]}")
+                    continue
+
+            print(f"   ✅ templates: {synced} files synced to DB")
+
+        except Exception as e:
+            print(f"   ❌ templates initial sync failed: {e}")
+
+    async def _initial_sync_commands(self, commands_dir: Path):
+        """Initial sync for command files in .claude/commands or ~/.claude/commands folder"""
+        try:
+            # Find all .md files in commands folder
+            md_files = list(commands_dir.glob('*.md'))
+
+            if not md_files:
+                print(f"   ℹ️  commands: No command files found")
+                return
+
+            print(f"   🔄 commands: Syncing {len(md_files)} command files...")
+
+            synced = 0
+            for md_file in md_files:
+                try:
+                    # Use the existing _sync_command_file method to sync each file
+                    await self._sync_command_file(md_file, 'created', from_database=False)
+                    synced += 1
+                except Exception as e:
+                    print(f"      ⚠️  Skipped {md_file.name}: {str(e)[:80]}")
+                    continue
+
+            print(f"   ✅ commands: {synced} files synced to DB")
+
+        except Exception as e:
+            print(f"   ❌ commands initial sync failed: {e}")
+
+    async def _initial_sync_agents(self, agents_dir: Path):
+        """Initial sync for agent files in .claude/agents or ~/.claude/agents folder"""
+        try:
+            # Find all .md files in agents folder
+            md_files = list(agents_dir.glob('*.md'))
+
+            if not md_files:
+                print(f"   ℹ️  agents: No agent files found")
+                return
+
+            print(f"   🔄 agents: Syncing {len(md_files)} agent files...")
+
+            synced = 0
+            for md_file in md_files:
+                try:
+                    # Use the existing _sync_agent_file method to sync each file
+                    await self._sync_agent_file(md_file, 'created', from_database=False)
+                    synced += 1
+                except Exception as e:
+                    print(f"      ⚠️  Skipped {md_file.name}: {str(e)[:80]}")
+                    continue
+
+            print(f"   ✅ agents: {synced} files synced to DB")
+
+        except Exception as e:
+            print(f"   ❌ agents initial sync failed: {e}")
+
+    async def _initial_sync_mcp_config(self, config_file: Path):
+        """Initial sync for MCP config file (.claude-mcp-config.json or .mcp.json)"""
+        try:
+            if not config_file.exists():
+                print(f"   ℹ️  mcp_config: No config file found")
+                return
+
+            print(f"   🔄 mcp_config: Syncing {config_file.name}...")
+
+            try:
+                # Use the existing _sync_mcp_config method to sync the file
+                await self._sync_mcp_config(config_file, 'created', from_database=False)
+                print(f"   ✅ mcp_config: Config file synced to DB")
+            except Exception as e:
+                print(f"      ⚠️  Failed to sync config: {str(e)[:80]}")
+
+        except Exception as e:
+            print(f"   ❌ mcp_config initial sync failed: {e}")
 
     # ============================================================================
     # Bidirectional Sync: Database → File
