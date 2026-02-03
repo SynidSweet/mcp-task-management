@@ -2,11 +2,146 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ DEV ENVIRONMENT RULES - READ FIRST
+
+**CRITICAL: You are working in the DEVELOPMENT environment**
+
+### Before You Start
+
+1. **Read Setup Documentation**
+   - 📖 [`DEV_SETUP.md`](./DEV_SETUP.md) - Project-specific setup guide
+   - 📖 [`../../DEVELOPMENT_GUIDE.md`](../../DEVELOPMENT_GUIDE.md) - System-wide master guide
+   - 📖 [`../SCHEMA.md`](../SCHEMA.md) - Authoritative database schema
+
+2. **Verify Environment**
+   ```bash
+   pwd  # Should be: /dev/mcp-server
+   ls -la .claude-tasks/data/  # Check local data directory
+   ```
+
+3. **Test MCP Server**
+   ```bash
+   python test_all_mcp_tools_direct.py  # All 35 tools should pass
+   ```
+
+### Data Storage Rules
+
+✅ **Local-First Storage:**
+- JSON files in `.claude-tasks/data/` directory
+- Markdown files in `docs/` directory
+- Schema: See `../SCHEMA.md` (authoritative documentation)
+- No external database dependencies
+
+**CRITICAL:**
+- ❌ NEVER assume file structure
+- ✅ ALWAYS verify schema in `../SCHEMA.md` first
+- ✅ ALWAYS read existing files to confirm structure
+- ✅ ALWAYS validate data against documented schema
+
+### Local-First Architecture
+
+> **✅ MIGRATION COMPLETE (2026-01-30)**: Supabase database removed. System now uses local-first architecture.
+> See [LOCAL_FIRST_REFACTORING.md](docs/architecture/LOCAL_FIRST_REFACTORING.md) for migration details.
+
+The MCP server operates in **local-first mode**:
+- **Single Source of Truth**: Local JSON/Markdown files (`.claude-tasks/data/`, `/docs/`)
+- **No database sync**: Files are directly read/written by MCP tools
+- **Frontend access**: HTTP API calls to MCP server (reads/writes local files)
+- **AI agent access**: Direct file system access via MCP protocol
+
+**Architecture (Updated 2026-01-30)**:
+- ✅ **File-only storage** (no Supabase dependency)
+- ✅ **MCP tools** read/write JSON files directly
+- ✅ **HTTP wrapper** provides REST API for frontend
+- ✅ **Watchdog file monitor** for change detection (optional)
+
+**Rules:**
+- ✅ Local JSON files are the authoritative data source
+- ✅ MCP tools operate on files directly
+- ✅ Frontend calls HTTP API (no direct file access)
+- ✅ Each machine maintains its own local data
+
+### HTTP Wrapper & Project Resumption (Production Mode)
+
+**HTTP Wrapper**: `http_wrapper.py` provides a centralized multi-project MCP server for production use.
+
+**Key Features**:
+- **Multi-project support**: Single server instance handles multiple projects
+- **Automatic resumption**: Projects automatically resume monitoring after server restart
+- **State persistence**: Monitored projects saved to `~/.claude-tasks/config/monitored_projects.json`
+- **Database-first recovery**: Primary state source is database (config file is fallback)
+
+**Resumption System (Updated 2025-01-05)**:
+- ✅ **Automatic state restoration** on server startup
+- ✅ **Database-first with config fallback** - queries `projects` table by `machine_id`
+- ✅ **Graceful degradation** - continues if database unavailable
+- ✅ **Per-project file monitoring** restored for all registered projects
+
+**Architecture**:
+```
+HTTP Wrapper Startup
+  ↓
+ProjectStateManager
+  ↓
+Database Query (primary) → Config File (fallback) → Empty (fresh start)
+  ↓
+Register each project → Initialize file monitoring → Ready
+```
+
+**Config Location**: `~/.claude-tasks/config/monitored_projects.json`
+
+See [`docs/architecture/project-resumption.md`](./docs/architecture/project-resumption.md) for complete details.
+
+### Deployment Rules
+
+❌ **NEVER do these without user confirmation:**
+- Sync MCP server to production
+- Modify production tool subscriptions
+- Disable file sync in production
+- Deploy schema changes without testing
+
+### Development Workflow
+
+✅ **Safe Commands:**
+```bash
+python test_all_mcp_tools_direct.py  # Run tests
+python server.py --project-dir "$(pwd)"  # Test server
+cat ../SCHEMA.md  # Check database schema
+cat .env  # Check configuration
+```
+
+❌ **Dangerous Commands (ASK USER FIRST):**
+```bash
+python run_migration.py  # Database migrations
+rm -rf .claude-tasks/  # Delete sync directory
+# Any deployment or production changes
+```
+
+### Pre-Flight Checklist
+
+Before developing MCP tools:
+
+- [ ] Read `DEV_SETUP.md` for project setup
+- [ ] Verify `.claude-tasks/data/` directory exists
+- [ ] Check `../SCHEMA.md` for data schema documentation
+- [ ] Run `python test_all_mcp_tools_direct.py` (35/35 passing)
+- [ ] Read existing JSON files to verify actual structure
+- [ ] Understand local-first file storage system
+
+### Quick Links
+
+- **Setup Guide:** [`DEV_SETUP.md`](./DEV_SETUP.md)
+- **Master Guide:** [`../../DEVELOPMENT_GUIDE.md`](../../DEVELOPMENT_GUIDE.md)
+- **Database Schema:** [`../SCHEMA.md`](../SCHEMA.md)
+- **Tool Documentation:** [`docs/`](./docs/) (8 category files)
+
+---
+
 ## What This Is
 
-A **simplified MCP (Model Context Protocol) server** providing 37 tools for task/sprint management. Built with a function-based architecture emphasizing directness over abstraction.
+A **simplified MCP (Model Context Protocol) server** providing 34 tools for task/sprint management. Built with a function-based architecture emphasizing directness over abstraction.
 
-**Key Stats**: 37 tools across 8 categories | 100% test coverage | Full sprint-task integration
+**Key Stats**: 34 tools across 8 categories | 100% test coverage | Full sprint-task integration
 
 **📋 Database Schema:** See `../SCHEMA.md` for complete database schema documentation (shared with frontend)
 
@@ -16,8 +151,16 @@ A **simplified MCP (Model Context Protocol) server** providing 37 tools for task
 # Run the server
 python server.py --project-dir "$(pwd)"
 
-# Run all tests (expect 37/37 passing)
-python test_all_mcp_tools_direct.py
+# Run all MCP tool tests
+python test_all_mcp_tools_direct.py  # 35 MCP tools
+
+# Run complete test suite (476 tests - 100% passing)
+venv/bin/python3 -m pytest tests/ -v  # All unit, integration, E2E tests
+
+# Run specific test categories
+venv/bin/python3 -m pytest tests/unit/ -v          # Unit tests only
+venv/bin/python3 -m pytest tests/integration/ -v  # Integration tests
+venv/bin/python3 -m pytest tests/e2e/ -v          # E2E workflows
 
 # Run database readiness check
 python test_database_readiness.py
@@ -26,8 +169,8 @@ python test_database_readiness.py
 python3 check_data_integrity.py
 python3 check_data_integrity.py --fix  # Auto-repair safe issues
 
-# Run migrations
-python3 run_migration.py supabase/migrations/<migration_file>.sql
+# Data migrations (if needed)
+# Schema changes are applied by updating JSON file structures directly
 ```
 
 ## Architecture Philosophy
@@ -58,7 +201,7 @@ mcp-server/
 ├── tools/                      # 8 tool modules
 │   ├── system_tools.py         # Health checks, project setup (3 tools)
 │   ├── task_tools.py           # Task CRUD (8 tools)
-│   ├── sprint_tools.py         # Sprint management (5 tools)
+│   ├── sprint_tools.py         # Sprint management (4 tools)
 │   ├── journal_tools.py        # Session tracking (3 tools)
 │   ├── git_tools.py            # Git validation (4 tools)
 │   ├── specification_tools.py  # Requirements (10 tools)
@@ -114,18 +257,18 @@ def register_your_tools(mcp, project_manager: ProjectManager):
 - Use helpers from `utils/helpers.py` for common operations
 - Keep tool logic in single function - no layers
 
-## File Sync System
+## File Storage System
 
-**UnifiedFileMonitor** watches files and syncs to Supabase automatically:
+**UnifiedFileMonitor** watches files for changes (optional):
 
-- **Local edit** → File monitor detects → Syncs to database
-- **Database edit** → Syncs to local files (bidirectional)
-- **Hash-based loop prevention** - Won't re-sync unchanged content
-- **Entity-level sync** - Only changed items update
+- **Local edit** → File monitor detects → Triggers change events
+- **MCP tools** → Read/write JSON files directly
+- **No database sync** - Files are the single source of truth
+- **Change detection** - For notifications and reload triggers
 
-**Synced entity types**: tasks, sprints, journal, specifications, templates, commands, agents, documentation, mcp_config_files + mcp_servers (normalized)
+**Managed entity types**: tasks, sprints, journal, specifications, templates, commands, agents, scripts, documentation, mcp_config_files + mcp_servers (normalized)
 
-**Tools don't handle sync** - Just save JSON, monitor handles the rest.
+**Tools operate directly on files** - Read JSON, modify, save JSON. No sync layer needed.
 
 ## Database Schema
 
@@ -133,13 +276,15 @@ def register_your_tools(mcp, project_manager: ProjectManager):
 
 - **projects** - Multi-project and multi-machine identification using **file-based project_id**
   - Composite primary key: `(id, machine_id)`
-  - project_id from `.claude-tasks/data/project_id` file (commit to version control!)
-  - Same repo on different machines = same project_id, different rows
-  - Each machine stores its local path
+  - project_id read from `.claude-tasks/data/project_id` file (MUST commit to version control!)
+  - Folder name used only as default initializer if file doesn't exist
+  - Same repo on different machines = same project_id (from file), different machine_ids
+  - Each machine stores its local path (can be different across machines)
 - **tasks** - Individual columns: id, title, description, status, priority, notes, dependencies (JSONB), completed_at, timestamps
-- **sprints** - id, title, status, dates, task_ids (JSONB)
+- **sprints** - id, title, description, status (idle/active/completed), task_ids (JSONB), timestamps
 - **journal_sessions** - (note: table name is `journal_sessions` not `journal`)
 - **documentation** - Simple markdown docs from `/docs/*.md` files - auto-synced with title, path, and full content (no metadata files needed)
+- **scripts** - Python script files from `.claude/scripts/*.py` - auto-synced (file-only entity, no MCP tools)
 - **specifications** - Requirements/specs management
 - **specifications_validated** - Human-approved specification snapshots (see Validation System below)
 - **mcp_config_files** + **mcp_servers** - Normalized MCP configuration storage (replaces old mcp_configs JSONB table)
@@ -147,13 +292,16 @@ def register_your_tools(mcp, project_manager: ProjectManager):
   - mcp_servers: Individual server configs with queryable columns (transport_type, command, url, etc.)
   - 10-100x faster queries with indexed columns
 
-**Connection info**: URL and keys in `tools/document_tools.py:40`
+**File paths**: Data directory paths are centralized in `config.py` and imported by all tools. This follows DRY principle and provides a single source of truth for file locations.
 
-**Project Identification (Updated 2025-10-29)**:
-- Projects identified by folder name in `.claude-tasks/data/project_id` file
-- Same repository cloned on different machines shares same project_id
-- Database uses composite key `(project_id, machine_id)` for multi-machine support
-- Path field stores full filesystem path for programmatic use
+**Project Identification (Updated 2026-01-30)**:
+- **Project ID** = Content of `.claude-tasks/data/project_id` file (authoritative source)
+- **Folder name** = Default initializer used only if file doesn't exist yet
+- Same repository cloned on different machines shares same project_id (from git-synced file)
+- Different machines can have different folder names, but same project_id
+- Each machine maintains its own local data files in `.claude-tasks/data/`
+- Machine ID stored in `.claude-tasks/data/machine_id` for identification
+- Path field in project metadata stores full filesystem path
 - See `../SCHEMA.md` "File-Based Project Identification" section for full details
 
 ## Specification Validation System
@@ -357,7 +505,7 @@ data = load_json_data(project_manager.get_data_file('tasks'))
 assert len(data['tasks']) == 1
 ```
 
-All 35 tools tested this way. Run with `python test_all_mcp_tools_direct.py`.
+All 34 tools tested this way. Run with `python test_all_mcp_tools_direct.py`.
 
 ## Common Helper Functions
 
@@ -673,13 +821,15 @@ Use `handle_error(e, operation)` for consistent error responses.
 **Complete docs in `docs/` directory:**
 
 - **[docs/README.md](docs/README.md)** - Documentation index
-- **[docs/architecture/](docs/architecture/)** - System design (4 files)
+- **[docs/architecture/](docs/architecture/)** - System design (6 files)
   - [simplified-architecture.md](docs/architecture/simplified-architecture.md) - Why function-based
   - [tool-registration.md](docs/architecture/tool-registration.md) - How tools work
   - [file-monitor.md](docs/architecture/file-monitor.md) - Sync system details
+  - [LOCAL_FIRST_REFACTORING.md](docs/architecture/LOCAL_FIRST_REFACTORING.md) - **ACTIVE** Refactoring roadmap
+  - [LOCAL_FIRST_TASK_INDEX.md](docs/architecture/LOCAL_FIRST_TASK_INDEX.md) - Quick task lookup for agents
 - **[docs/development/](docs/development/)** - Developer guides (2 files)
   - [adding-tools.md](docs/development/adding-tools.md) - Step-by-step tool creation
-- **[docs/tools/](docs/tools/)** - All 35 tools documented (10 files)
+- **[docs/tools/](docs/tools/)** - All 34 tools documented (10 files)
 - **[docs/agent-orientation/](docs/agent-orientation/)** - AI agent workflows (3 files)
 - **[docs/testing/](docs/testing/)** - Testing guide (1 file)
 
@@ -697,11 +847,10 @@ Use `handle_error(e, operation)` for consistent error responses.
 Installed in `venv/`:
 
 - `mcp` - Official MCP SDK
-- `watchdog` - File monitoring
-- Supabase client libs
+- `watchdog` - File monitoring (optional)
 - pytest (testing)
 
-Install: `pip install mcp watchdog`
+Install: `pip install mcp watchdog pytest`
 
 ## Data Integrity Checker
 
